@@ -1,0 +1,29 @@
+# Git hooks. Installed automatically by `pnpm install` (the "prepare" script).
+# CI runs the same checks, so --no-verify only delays the failure.
+
+pre-commit:
+  piped: true
+  jobs:
+    - name: personal-data guard
+      run: node scripts/guard-personal-data.mjs {staged_files}
+    - name: secrets
+      run: ./node_modules/.bin/secretlint --maskSecrets {staged_files}
+    - name: format + lint
+      glob: "*.{js,mjs,cjs,ts,tsx,jsx,json,jsonc,css}"
+      run: ./node_modules/.bin/biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      stage_fixed: true
+
+commit-msg:
+  jobs:
+    - name: conventional commit
+      run: ./node_modules/.bin/commitlint --edit {1}
+
+pre-push:
+  piped: true
+  jobs:
+    - name: personal-data guard (whole repo)
+      run: node scripts/guard-personal-data.mjs --all
+    - name: lint (whole repo)
+      run: ./node_modules/.bin/biome ci .
+    - name: typecheck + test + build
+      run: ./node_modules/.bin/turbo run typecheck test build

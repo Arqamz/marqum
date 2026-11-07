@@ -1,0 +1,10 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommitTypeAll(chore)", ":semanticCommitScope(deps)"],
+  "schedule": ["before 6am on monday"],
+  "minimumReleaseAge": "7 days",
+  "packageRules": [
+    { "matchUpdateTypes": ["minor", "patch"], "groupName": "non-major dependencies", "automerge": true },
+    { "matchManagers": ["github-actions"], "groupName": "github actions" }
+  ]
+}

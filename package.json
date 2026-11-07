@@ -1,0 +1,30 @@
+{
+  "name": "budget",
+  "private": true,
+  "description": "Local-first personal budgeting for NayaPay & SadaPay wallets: Android app + web, Cloudflare backend.",
+  "license": "MIT",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "guard": "node scripts/guard-personal-data.mjs --all",
+    "verify": "pnpm guard && biome ci . && turbo run typecheck test build",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6",
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
+    "@secretlint/secretlint-rule-preset-recommend": "13.1.0",
+    "lefthook": "2.2.2",
+    "secretlint": "13.1.0",
+    "turbo": "2.11.10",
+    "typescript": "7.0.2"
+  }
+}

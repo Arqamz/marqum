@@ -1,0 +1,28 @@
+node_modules/
+dist/
+coverage/
+.turbo/
+.wrangler/
+*.log
+.DS_Store
+
+# local secrets
+.dev.vars
+.env*
+!.env.example
+*.jks
+*.keystore
+keystore.properties
+
+# Android build output
+apps/android/android/app/build/
+apps/android/android/.gradle/
+apps/android/android/local.properties
+
+# Personal financial data — NEVER commit. Real statements live in statements/ (local only).
+statements/
+*.pdf
+*.csv
+*.xlsx
+!**/fixtures/**/*.pdf
+!**/fixtures/**/*.csv
