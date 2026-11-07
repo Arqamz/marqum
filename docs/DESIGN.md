@@ -31,7 +31,12 @@ The goal is an app that feels calm, specific and fast: you open it, see where yo
 
 ## Type
 
-- **Inter** is the only typeface for the UI.
+- **Geist** (SIL OFL, bundled) is the text and numbers face: UI, labels, every amount.
+- **PP Neue Montreal** is the display face: the net-position hero, screen headlines and the wordmark.
+  - Its free licence covers personal use only and doesn't allow redistribution, so the files are never committed.
+  - Builds load them from the gitignored `apps/web/src/fonts/licensed/` folder (CI gets them from a repository secret) and fall back to Geist when they're absent.
+- **Geist Mono** is used only where the monospace rule below allows it.
+- Season is not used: its sans–serif blend doesn't suit numeric UI, and it needs a paid licence.
 - **Tabular figures everywhere money appears** (`font-variant-numeric: tabular-nums`), so columns and changing numbers don't jitter.
 - **Monospace only where the content is code-like:** transaction IDs, the raw statement text in the import preview, IBAN fragments. Never for amounts or labels.
 - **Headings:**

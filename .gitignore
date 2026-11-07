@@ -26,3 +26,6 @@ statements/
 *.xlsx
 !**/fixtures/**/*.pdf
 !**/fixtures/**/*.csv
+
+# Licensed fonts (PP Neue Montreal) — personal licence, never committed
+apps/web/src/fonts/licensed/

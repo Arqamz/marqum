@@ -1,6 +1,6 @@
 # Architecture
 
-Budget is a local-first personal finance app for two Pakistani wallets: **SadaPay** and **NayaPay**.
+Marqūm (مرقوم, "inscribed") is a local-first personal finance app for two Pakistani wallets: **SadaPay** and **NayaPay**.
 It runs as a sideloaded Android app and as a website. Both use the same UI and talk to one Cloudflare backend.
 
 Design goals, in priority order:
@@ -100,15 +100,18 @@ statements/   your real statements, local only, gitignored
    - The Worker parses the text into a **provisional** transaction, which syncs everywhere within seconds.
    - Raw text is queued on the phone while offline.
    - This depends on those apps' notifications reaching the phone (the target phone runs LineageOS with Google services, so they do).
-2. **Statement inbox (Android).**
-   - With "All files access" granted once, the app scans `Download/` for known statement filenames:
-     - NayaPay: `m-MM-YYYY.pdf|csv`
-     - SadaPay: `sadapay_account_statement_DD-MM-YYYY_DD-MM-YYYY.pdf`
+2. **Statement inbox (Android), for NayaPay.**
+   - NayaPay writes statements to shared storage at `Android/media/com.nayapay.app/NayaPay/Other/m-MM-YYYY.{pdf,csv}`
+     (verified on LineageOS 23.2 / Android 16).
+   - With "All files access" granted once, the app scans that folder plus `Download/` for the known filenames
+     (NayaPay `m-MM-YYYY.pdf|csv`, SadaPay `sadapay_account_statement_DD-MM-YYYY_DD-MM-YYYY.pdf`).
    - Scans happen on open and resume, and via a FileObserver while the app runs.
    - New files are parsed on the device. If all statement checks pass they are imported automatically, with no button to press.
    - Files are de-duplicated by SHA-256.
    - The banks have no API, so you still tap "generate statement" in their app; the rest is automatic.
-3. **Share sheet.** "Share → Budget" from any app or file manager.
+3. **Share sheet, for SadaPay.** SadaPay keeps generated statements inside its own app storage, so the flow is
+   generate → **Share → Marqūm**. The share target accepts `application/pdf` and `text/csv` and imports straight away,
+   with no upload screen. It works from any other app or file manager too.
 4. **Manual quick-add.** Amount, wallet and reason, entered as a **provisional** transaction.
 5. **Balance entry.** You type a wallet's current balance. Any gap against the ledger shows as
    "Rs X unaccounted — add it?", which turns into a quick-add.

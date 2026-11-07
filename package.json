@@ -1,7 +1,7 @@
 {
-  "name": "budget",
+  "name": "marqum",
   "private": true,
-  "description": "Local-first personal budgeting for NayaPay & SadaPay wallets: Android app + web, Cloudflare backend.",
+  "description": "Marqūm — a sealed ledger for SadaPay & NayaPay: Android app + web, local-first, Cloudflare backend.",
   "license": "MIT",
   "packageManager": "pnpm@12.18.0",
   "engines": {
