@@ -5,7 +5,7 @@
 A sealed ledger for your SadaPay and NayaPay wallets: statements in, a clear month out. Use it as a sideloaded Android
 app or a website, backed by a free Cloudflare Worker.
 
-*Marqūm* is Arabic for "inscribed, recorded", from the root ر ق م (r-q-m, numbers). It comes from *kitābun marqūm*, "a
+_Marqūm_ is Arabic for "inscribed, recorded", from the root ر ق م (r-q-m, numbers). It comes from _kitābun marqūm_, "a
 register inscribed" (Qur'an 83:9). Here the bank statement is the inscription, and a closed month is sealed.
 
 - Statements are picked up from the phone automatically and treated as the source of truth.

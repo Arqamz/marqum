@@ -9,7 +9,7 @@ pre-commit:
     - name: secrets
       run: ./node_modules/.bin/secretlint --maskSecrets {staged_files}
     - name: format + lint
-      glob: "*.{js,mjs,cjs,ts,tsx,jsx,json,jsonc,css}"
+      glob: "*.{js,mjs,cjs,ts,tsx,jsx,json,jsonc,css,md,html,svg,graphql}"
       run: ./node_modules/.bin/biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
       stage_fixed: true
 
