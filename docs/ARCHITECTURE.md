@@ -99,7 +99,7 @@ statements/   your real statements, local only, gitignored
    - A `NotificationListenerService` reads NayaPay and SadaPay payment notifications and posts the raw text to `/ingest/notification`.
    - The Worker parses the text into a **provisional** transaction, which syncs everywhere within seconds.
    - Raw text is queued on the phone while offline.
-   - This depends on those apps' notifications reaching the phone (on LineageOS that needs microG or GApps).
+   - This depends on those apps' notifications reaching the phone (the target phone runs LineageOS with Google services, so they do).
 2. **Statement inbox (Android).**
    - With "All files access" granted once, the app scans `Download/` for known statement filenames:
      - NayaPay: `m-MM-YYYY.pdf|csv`

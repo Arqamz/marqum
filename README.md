@@ -10,7 +10,7 @@ website, backed by a free Cloudflare Worker.
 - Loans (debt mode), savings goals, and a "can I afford this?" what-if calculator.
 - Month-end close: a checklist, immutable snapshots, and fingerprint-gated edits after close.
 
-> **Status:** foundation only (tooling and hooks). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design
+> **Status:** foundation only (tooling and hooks). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, [docs/DESIGN.md](docs/DESIGN.md) for UI rules,
 > and the roadmap below.
 
 ## Roadmap
