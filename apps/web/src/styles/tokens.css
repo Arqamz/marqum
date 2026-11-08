@@ -1,0 +1,110 @@
+/*
+ * Design tokens — the only place colour, radius, type and motion values live (docs/DESIGN.md).
+ * Contrast (WCAG): fg/bg ≥ 15:1, muted/bg ≥ 6:1, accent/surface ≥ 6:1, semantic text ≥ 4.5:1 in both themes.
+ */
+:root {
+  color-scheme: light;
+
+  /* neutrals */
+  --bg: #f7f6f2;
+  --surface: #ffffff;
+  --surface-2: #efeee9;
+  --surface-3: #e4e3dd;
+  --fg: #17171c;
+  --fg-muted: #55555f;
+  --fg-subtle: #6b6b75;
+  --border: #dddcd5;
+  --border-strong: #c4c3bb;
+  --overlay: rgb(16 16 20 / 0.42);
+
+  /* accent: primary action, current selection, focus — nothing else */
+  --accent: #4f46e5;
+  --accent-fg: #ffffff;
+  --accent-text: #4338ca;
+  --accent-soft: #e8e7fc;
+
+  /* semantic */
+  --pos: #157a3b;
+  --pos-soft: #e3f3e8;
+  --neg: #b42318;
+  --neg-soft: #fbe7e5;
+  --warn: #9a5200;
+  --warn-soft: #fcefd9;
+  --warn-line: #d98a1c;
+
+  /* charts */
+  --chart-bar: #8d8c96;
+  --chart-bar-current: #4b4b55;
+  --chart-in: #157a3b;
+  --chart-out: #4b4b55;
+  --chart-grid: #e4e3dd;
+
+  /* shadows — only for floating things */
+  --shadow-float: 0 12px 32px rgb(16 16 20 / 0.16), 0 2px 6px rgb(16 16 20 / 0.08);
+
+  /* radius: inner = outer − padding */
+  --radius-sheet: 28px;
+  --radius-card: 20px; /* with 12px padding → 8px inside, with 16px padding → 4px inside */
+  --radius-control: 12px;
+  --radius-inner: 8px;
+  --radius-chip: 4px;
+
+  /* type */
+  --font-text: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "PP Neue Montreal", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --text-hero: 3.5rem; /* 56px: the net position, largest type in the app */
+  --text-headline: 1.625rem; /* 26px */
+
+  /* motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur: 200ms;
+
+  /* layout */
+  --tabbar-h: 64px;
+  --topbar-h: 56px;
+  --content-max: 40rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #121214;
+    --surface: #17171d;
+    --surface-2: #202028;
+    --surface-3: #2a2a33;
+    --fg: #f2f2f4;
+    --fg-muted: #a9a9b4;
+    --fg-subtle: #8e8e99;
+    --border: #2b2b34;
+    --border-strong: #3c3c47;
+    --overlay: rgb(0 0 0 / 0.6);
+
+    --accent: #5850ec;
+    --accent-fg: #ffffff;
+    --accent-text: #a5a8fd;
+    --accent-soft: #25244a;
+
+    --pos: #4cc77a;
+    --pos-soft: #13291c;
+    --neg: #ff7a6e;
+    --neg-soft: #34171a;
+    --warn: #f2b13c;
+    --warn-soft: #2f2410;
+    --warn-line: #c98b22;
+
+    --chart-bar: #6e6e7a;
+    --chart-bar-current: #c9c9d2;
+    --chart-in: #4cc77a;
+    --chart-out: #c9c9d2;
+    --chart-grid: #26262e;
+
+    --shadow-float: 0 12px 32px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur: 0ms;
+  }
+}

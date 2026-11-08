@@ -1,0 +1,178 @@
+@import "tailwindcss";
+@import "./tokens.css";
+@import "./fonts.css";
+
+/* Map tokens into Tailwind utilities (bg-surface, text-fg-muted, rounded-card, …). */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-overlay: var(--overlay);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-text: var(--accent-text);
+  --color-accent-soft: var(--accent-soft);
+  --color-pos: var(--pos);
+  --color-pos-soft: var(--pos-soft);
+  --color-neg: var(--neg);
+  --color-neg-soft: var(--neg-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-line: var(--warn-line);
+
+  --radius-sheet: var(--radius-sheet);
+  --radius-card: var(--radius-card);
+  --radius-control: var(--radius-control);
+  --radius-inner: var(--radius-inner);
+  --radius-chip: var(--radius-chip);
+
+  --font-sans: var(--font-text);
+  --font-display: var(--font-display);
+  --font-mono: var(--font-mono);
+
+  --text-hero: var(--text-hero);
+  --text-hero--line-height: 1;
+  --text-hero--letter-spacing: -0.03em;
+  --text-headline: var(--text-headline);
+  --text-headline--line-height: 1.15;
+  --text-headline--letter-spacing: -0.015em;
+
+  --shadow-float: var(--shadow-float);
+  --ease-out: var(--ease-out);
+  --default-transition-duration: var(--dur);
+  --default-transition-timing-function: var(--ease-out);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-text);
+    font-feature-settings: "ss01";
+    -webkit-font-smoothing: antialiased;
+    min-height: 100dvh;
+    overscroll-behavior-y: none;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+  p {
+    text-wrap: pretty;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  button {
+    cursor: pointer;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--fg-subtle);
+  }
+}
+
+@utility num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility pb-safe-plus {
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+}
+@utility px-safe {
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+}
+
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+@utility skeleton {
+  background: var(--surface-2);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+/* Sheets: slide up on phones, fade/scale on wide screens. 200ms ease-out; off under reduced motion via --dur. */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes overlay-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes sheet-down {
+  to {
+    transform: translateY(100%);
+  }
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.98);
+  }
+}
+@keyframes dialog-out {
+  to {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.98);
+  }
+}
+.sheet-overlay[data-state="open"] {
+  animation: overlay-in var(--dur) var(--ease-out);
+}
+.sheet-overlay[data-state="closed"] {
+  animation: overlay-out var(--dur) var(--ease-out);
+}
+.sheet-content[data-state="open"] {
+  animation: sheet-up calc(var(--dur) * 1.25) var(--ease-out);
+}
+.sheet-content[data-state="closed"] {
+  animation: sheet-down var(--dur) var(--ease-out);
+}
+@media (min-width: 48rem) {
+  .sheet-content[data-state="open"] {
+    animation: dialog-in var(--dur) var(--ease-out);
+  }
+  .sheet-content[data-state="closed"] {
+    animation: dialog-out var(--dur) var(--ease-out);
+  }
+}
+
+/* Warm (provisional) rows: dashed outline. */
+.warm-outline {
+  outline: 1.5px dashed var(--warn-line);
+  outline-offset: -1.5px;
+}

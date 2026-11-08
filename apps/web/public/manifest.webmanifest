@@ -1,0 +1,11 @@
+{
+  "name": "Marqūm",
+  "short_name": "Marqūm",
+  "description": "A sealed ledger for SadaPay and NayaPay.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F7F6F2",
+  "theme_color": "#4F46E5",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
