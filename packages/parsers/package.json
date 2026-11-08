@@ -1,0 +1,29 @@
+{
+  "name": "@marqum/parsers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bank statement (PDF/CSV) and notification parsers.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./pdf": "./src/pdf-lines.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "parse": "node --experimental-strip-types --no-warnings scripts/parse.ts"
+  },
+  "dependencies": {
+    "@marqum/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "@marqum/config": "workspace:*",
+    "@types/node": "26.6.6",
+    "pdfjs-dist": "6.4.299",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "peerDependencies": {
+    "pdfjs-dist": ">=6"
+  }
+}
