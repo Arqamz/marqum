@@ -42,6 +42,10 @@ export interface MarqumNativePlugin {
     event: "shareReceived",
     listener: (data: { files: SharedFile[] }) => void,
   ): Promise<PluginListenerHandle>;
+  addListener(
+    event: "notificationCaptured",
+    listener: (data: NotificationIngest & { sent: boolean }) => void,
+  ): Promise<PluginListenerHandle>;
 
   // ── Notification capture (NotificationListenerService, only com.nayapay.app & com.sadapay.app) ──
   checkNotificationAccess(): Promise<{ granted: boolean }>;
@@ -58,10 +62,6 @@ export interface MarqumNativePlugin {
   getCapturedNotifications(options: {
     limit: number;
   }): Promise<{ items: (NotificationIngest & { sent: boolean })[] }>;
-  addListener(
-    event: "notificationCaptured",
-    listener: (data: NotificationIngest & { sent: boolean }) => void,
-  ): Promise<PluginListenerHandle>;
 
   // ── App info ───────────────────────────────────────────────────────────────────────
   getAppInfo(): Promise<{ versionName: string; versionCode: number }>;
