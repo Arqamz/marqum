@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand (docs/brand/icon.svg) -->
+    <color name="marqum_indigo">#4F46E5</color>
+    <color name="marqum_mark">#F7F6F2</color>
+    <!-- App surface behind the WebView before the web UI paints (light). -->
+    <color name="marqum_surface">#F7F6F2</color>
+    <color name="colorPrimary">#4F46E5</color>
+    <color name="colorPrimaryDark">#4F46E5</color>
+    <color name="colorAccent">#4F46E5</color>
+</resources>

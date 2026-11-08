@@ -1,0 +1,27 @@
+{
+  "name": "@marqum/android",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Capacitor Android shell for apps/web, plus Marqūm's native plugins.",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "sync": "cap sync android",
+    "build:debug": "sh scripts/gradle.sh assembleDebug",
+    "build:release": "sh scripts/gradle.sh assembleRelease",
+    "lint:android": "sh scripts/gradle.sh lint",
+    "install:phone": "adb install -r android/app/build/outputs/apk/release/app-release.apk"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.6.0",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.6.0",
+    "@capacitor/local-notifications": "8.3.1",
+    "@capacitor/network": "8.0.1",
+    "@capacitor/preferences": "8.0.1",
+    "@capgo/capacitor-native-biometric": "8.9.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.0"
+  },
+  "type": "module"
+}

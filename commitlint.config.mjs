@@ -7,5 +7,6 @@ export default {
       ["core", "parsers", "schema", "api", "web", "android", "config", "repo", "ci", "deps", "docs"],
     ],
     "body-max-line-length": [0],
+    "subject-case": [0],
   },
 };

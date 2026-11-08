@@ -1,0 +1,104 @@
+name: Release Android
+
+# Every v* tag builds a signed APK and publishes it as a GitHub Release (Obtainium tracks these).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      VITE_API_BASE: https://marqum.arqam-mzia.workers.dev
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Version from tag
+        id: version
+        run: |
+          name="${GITHUB_REF_NAME#v}"
+          if ! printf '%s' "$name" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag $GITHUB_REF_NAME is not v<semver>"; exit 1
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Licensed fonts (optional)
+        env:
+          FONTS_TGZ_BASE64: ${{ secrets.MARQUM_FONTS_TGZ_BASE64 }}
+        run: |
+          if [ -z "$FONTS_TGZ_BASE64" ]; then
+            echo "MARQUM_FONTS_TGZ_BASE64 not set; building with fallback fonts."
+            exit 0
+          fi
+          mkdir -p apps/web/src/fonts/licensed
+          printf '%s' "$FONTS_TGZ_BASE64" | base64 -d | tar -xz -C apps/web/src/fonts/licensed
+          echo "Licensed fonts extracted."
+
+      - name: Build web
+        run: pnpm --filter @marqum/web build
+
+      - name: Capacitor sync
+        run: pnpm --filter @marqum/android exec cap sync android
+
+      - name: Release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MARQUM_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Secret MARQUM_KEYSTORE_BASE64 is missing"; exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "MARQUM_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        working-directory: apps/android/android
+        env:
+          MARQUM_KEYSTORE_PASSWORD: ${{ secrets.MARQUM_KEYSTORE_PASSWORD }}
+          MARQUM_KEY_ALIAS: ${{ secrets.MARQUM_KEY_ALIAS }}
+          MARQUM_KEY_PASSWORD: ${{ secrets.MARQUM_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon \
+            -PversionName="${{ steps.version.outputs.name }}" \
+            -PversionCode="${{ github.run_number }}"
+
+      - name: Verify signature and rename
+        id: apk
+        run: |
+          src=apps/android/android/app/build/outputs/apk/release/app-release.apk
+          out="marqum-${{ steps.version.outputs.name }}.apk"
+          build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          "$build_tools/apksigner" verify --print-certs "$src"
+          cp "$src" "$out"
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.path }}
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.version.outputs.name, '-') }}
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"

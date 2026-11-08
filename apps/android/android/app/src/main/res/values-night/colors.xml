@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App surface behind the WebView before the web UI paints (dark). -->
+    <color name="marqum_surface">#121214</color>
+</resources>

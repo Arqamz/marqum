@@ -1,0 +1,110 @@
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+
+// ── Versioning ────────────────────────────────────────────────────────────────────────
+// apps/android/version.properties holds the default; CI passes -PversionName / -PversionCode.
+def versionProps = new Properties()
+def versionFile = rootProject.file('../version.properties')
+if (versionFile.exists()) {
+    versionFile.withInputStream { versionProps.load(it) }
+}
+def marqumVersionName = (project.findProperty('versionName') ?: versionProps.getProperty('versionName', '0.0.0')).toString()
+def marqumVersionCode = (project.findProperty('versionCode') ?: versionProps.getProperty('versionCode', '1')).toString().toInteger()
+
+// ── Release signing ──────────────────────────────────────────────────────────────────
+// Environment variables win (CI); otherwise android/keystore.properties (gitignored, local).
+def keystoreProps = new Properties()
+def keystorePropsFile = rootProject.file('keystore.properties')
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+def signingValue = { String envName, String propName ->
+    def v = System.getenv(envName)
+    return (v != null && !v.isEmpty()) ? v : keystoreProps.getProperty(propName)
+}
+def releaseStoreFile = signingValue('MARQUM_KEYSTORE_PATH', 'storeFile')
+def releaseSigningReady = releaseStoreFile != null && file(releaseStoreFile).exists()
+
+android {
+    namespace = "app.marqum"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "app.marqum"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode marqumVersionCode
+        versionName marqumVersionName
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            if (releaseSigningReady) {
+                storeFile file(releaseStoreFile)
+                storePassword signingValue('MARQUM_KEYSTORE_PASSWORD', 'storePassword')
+                keyAlias signingValue('MARQUM_KEY_ALIAS', 'keyAlias')
+                keyPassword signingValue('MARQUM_KEY_PASSWORD', 'keyPassword')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (releaseSigningReady) {
+                signingConfig signingConfigs.release
+            } else {
+                logger.warn("Marqūm: no release keystore (MARQUM_KEYSTORE_PATH or android/keystore.properties); release APK will be unsigned.")
+            }
+        }
+    }
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+    lint {
+        // The web bundle is Capacitor-managed; lint the native code only.
+        checkDependencies false
+        abortOnError true
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation "androidx.core:core-ktx:$androidxCoreVersion"
+    implementation "androidx.work:work-runtime:$androidxWorkVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
