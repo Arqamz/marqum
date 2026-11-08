@@ -1,0 +1,22 @@
+{
+  "name": "@marqum/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure domain logic: commands, reconciliation, analytics, planning, month close.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@marqum/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "@marqum/config": "workspace:*",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  }
+}

@@ -1,0 +1,265 @@
+import { z } from "zod";
+
+/**
+ * Entities. Every synced row carries `version` (server-assigned, global, monotonic) and `deleted` (tombstone).
+ * Money: integer paisa (Rs 1 = 100). Negative = money left the wallet.
+ * Times: Asia/Karachi local strings `YYYY-MM-DDTHH:mm`; dates `YYYY-MM-DD`; months `YYYY-MM`.
+ */
+
+export const Paisa = z.number().int();
+export const LocalDateTime = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+export const LocalDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export const Month = z.string().regex(/^\d{4}-\d{2}$/);
+export const Id = z.string().min(1).max(64);
+
+const synced = { version: z.number().int(), deleted: z.boolean().default(false) };
+
+export const AccountId = z.enum(["sadapay", "nayapay"]);
+export type AccountId = z.infer<typeof AccountId>;
+
+export const Account = z.object({
+  id: AccountId,
+  name: z.string(),
+  /** vault = savings, bills, recurring (must stay above its floor); pocket = quick spending (may hit zero). */
+  role: z.enum(["vault", "pocket"]),
+  ...synced,
+});
+export type Account = z.infer<typeof Account>;
+
+/**
+ * What a transaction *is*, independent of category. Only `spend` and `fee` count as spending in analytics.
+ * - funding: Meezan (or any outside source of your own money) → wallet
+ * - internal: SadaPay ↔ NayaPay
+ * - income: money from others that isn't a loan or a reimbursement
+ * - loan_in / loan_repay: borrowing and paying back (reduce/increase debt, not spending)
+ * - reimbursement: someone paying you back; offsets `linked_txn_id`'s category
+ */
+export const Flow = z.enum([
+  "spend",
+  "fee",
+  "funding",
+  "internal",
+  "income",
+  "loan_in",
+  "loan_repay",
+  "reimbursement",
+]);
+export type Flow = z.infer<typeof Flow>;
+
+/**
+ * verified    = row from a bank statement (amount/time/description immutable)
+ * provisional = from a notification or manual entry, not yet matched to a statement ("warm")
+ * disputed    = provisional, but a statement covering its date doesn't contain it — user must resolve
+ */
+export const TxnStatus = z.enum(["verified", "provisional", "disputed"]);
+export type TxnStatus = z.infer<typeof TxnStatus>;
+
+export const TxnSource = z.enum(["statement", "notification", "manual"]);
+
+export const Transaction = z.object({
+  id: Id,
+  account_id: AccountId,
+  occurred_at: LocalDateTime,
+  amount: Paisa,
+  status: TxnStatus,
+  source: TxnSource,
+  flow: Flow,
+  /** bank's own text, e.g. "Outgoing fund transfer to Danish …" (empty for manual) */
+  description: z.string(),
+  /** bank transaction type, e.g. "IBFT In", "Card payment" */
+  bank_type: z.string().nullable(),
+  /** the user's reason, or the transfer purpose/message extracted from the statement */
+  reason: z.string().nullable(),
+  counterparty_id: Id.nullable(),
+  category_id: Id.nullable(),
+  /** stable statement identity: `naya:<txn id>` or `sada:h<hash>`; null for provisional rows */
+  external_id: z.string().nullable(),
+  statement_id: Id.nullable(),
+  loan_id: Id.nullable(),
+  /** reimbursement → the expense it pays back */
+  linked_txn_id: Id.nullable(),
+  fee: Paisa.default(0),
+  balance_after: Paisa.nullable(),
+  /** raw notification this came from, if any */
+  notification_id: Id.nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  ...synced,
+});
+export type Transaction = z.infer<typeof Transaction>;
+
+export const StatementCheck = z.object({ ok: z.boolean(), label: z.string() });
+
+export const Statement = z.object({
+  id: Id,
+  account_id: AccountId,
+  period_from: LocalDate,
+  period_to: LocalDate,
+  file_name: z.string(),
+  file_sha256: z.string(),
+  opening: Paisa.nullable(),
+  closing: Paisa.nullable(),
+  total_in: Paisa,
+  total_out: Paisa,
+  row_count: z.number().int(),
+  checks: z.array(StatementCheck),
+  imported_at: z.string(),
+  ...synced,
+});
+export type Statement = z.infer<typeof Statement>;
+
+export const BalanceEntry = z.object({
+  id: Id,
+  account_id: AccountId,
+  as_of: LocalDateTime,
+  balance: Paisa,
+  source: z.enum(["statement_open", "statement_close", "manual"]),
+  statement_id: Id.nullable(),
+  ...synced,
+});
+export type BalanceEntry = z.infer<typeof BalanceEntry>;
+
+export const Category = z.object({
+  id: Id,
+  parent_id: Id.nullable(),
+  name: z.string(),
+  /** lucide icon name, kebab-case (e.g. "car", "utensils") */
+  icon: z.string(),
+  wallet_hint: AccountId.nullable(),
+  /** fixed = recurring-type (bills, subscriptions); variable = discretionary */
+  nature: z.enum(["fixed", "variable"]),
+  sort: z.number().int(),
+  /** suggested categories stay hidden until first used */
+  hidden: z.boolean(),
+  ...synced,
+});
+export type Category = z.infer<typeof Category>;
+
+export const Counterparty = z.object({
+  id: Id,
+  name: z.string(),
+  kind: z.enum(["person", "merchant", "self", "family"]),
+  /** normalised keys extracted from descriptions that map to this counterparty */
+  aliases: z.array(z.string()),
+  default_category_id: Id.nullable(),
+  default_flow: Flow.nullable(),
+  ...synced,
+});
+export type Counterparty = z.infer<typeof Counterparty>;
+
+export const Rule = z.object({
+  id: Id,
+  /** case-insensitive regex source, matched against `${description} ${reason}` */
+  pattern: z.string(),
+  category_id: Id.nullable(),
+  flow: Flow.nullable(),
+  counterparty_id: Id.nullable(),
+  priority: z.number().int(),
+  ...synced,
+});
+export type Rule = z.infer<typeof Rule>;
+
+export const Recurring = z.object({
+  id: Id,
+  name: z.string(),
+  account_id: AccountId,
+  category_id: Id.nullable(),
+  counterparty_id: Id.nullable(),
+  amount: Paisa, // positive: expected monthly outflow
+  day_of_month: z.number().int().min(1).max(31),
+  active: z.boolean(),
+  detected: z.boolean(),
+  ...synced,
+});
+export type Recurring = z.infer<typeof Recurring>;
+
+export const Loan = z.object({
+  id: Id,
+  lender: z.string(),
+  counterparty_id: Id.nullable(),
+  principal: Paisa, // positive
+  started_on: LocalDate,
+  purpose: z.string(), // e.g. "Bicycle"
+  installment: Paisa, // planned monthly repayment, positive
+  note: z.string().nullable(),
+  /** payments made outside the wallets (e.g. cash) */
+  manual_repaid: Paisa.default(0),
+  closed_on: LocalDate.nullable(),
+  ...synced,
+});
+export type Loan = z.infer<typeof Loan>;
+
+export const Goal = z.object({
+  id: Id,
+  name: z.string(),
+  icon: z.string(),
+  target: Paisa,
+  monthly: Paisa, // planned contribution
+  priority: z.number().int(),
+  achieved_on: LocalDate.nullable(),
+  ...synced,
+});
+export type Goal = z.infer<typeof Goal>;
+
+/** Virtual envelope moves inside SadaPay: + sets money aside for a goal, − releases/spends it. */
+export const GoalMove = z.object({
+  id: Id,
+  goal_id: Id,
+  amount: Paisa,
+  on: LocalDate,
+  note: z.string().nullable(),
+  ...synced,
+});
+export type GoalMove = z.infer<typeof GoalMove>;
+
+export const MonthRecord = z.object({
+  id: Month,
+  status: z.enum(["open", "closed"]),
+  closed_at: z.string().nullable(),
+  snapshot_key: z.string().nullable(),
+  snapshot_sha256: z.string().nullable(),
+  ...synced,
+});
+export type MonthRecord = z.infer<typeof MonthRecord>;
+
+export const Notification = z.object({
+  id: Id,
+  package: z.string(),
+  title: z.string(),
+  text: z.string(),
+  posted_at: LocalDateTime,
+  status: z.enum(["parsed", "ignored", "unparsed"]),
+  transaction_id: Id.nullable(),
+  ...synced,
+});
+export type Notification = z.infer<typeof Notification>;
+
+export const Setting = z.object({ id: z.string(), value: z.string(), ...synced });
+export type Setting = z.infer<typeof Setting>;
+
+/** Known setting ids and defaults. */
+export const SETTINGS = {
+  income_monthly: "8500000", // Rs 85,000 into the two wallets each month
+  avg_window: "6", // 3 or 6 complete months
+  close_reminder_day: "25",
+} as const;
+
+export const TABLES = {
+  accounts: Account,
+  transactions: Transaction,
+  statements: Statement,
+  balances: BalanceEntry,
+  categories: Category,
+  counterparties: Counterparty,
+  rules: Rule,
+  recurring: Recurring,
+  loans: Loan,
+  goals: Goal,
+  goal_moves: GoalMove,
+  months: MonthRecord,
+  notifications: Notification,
+  settings: Setting,
+} as const;
+export type TableName = keyof typeof TABLES;
+export const TABLE_NAMES = Object.keys(TABLES) as TableName[];
+export type Row<T extends TableName> = z.infer<(typeof TABLES)[T]>;

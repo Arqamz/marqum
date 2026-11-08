@@ -1,0 +1,1 @@
+{ "extends": "@marqum/config/tsconfig/base.json", "include": ["src", "test"] }
