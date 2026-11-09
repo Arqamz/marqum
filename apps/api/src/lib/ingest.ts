@@ -6,7 +6,7 @@ import { ulid } from "ulidx";
 import type { Env } from "../env.ts";
 import { sha256Hex } from "./crypto.ts";
 import { runCommand } from "./execute.ts";
-import { ensureSeeded, loadDataset, writeMutations } from "./store.ts";
+import { ensureSeeded, getEpoch, loadDataset, writeMutations } from "./store.ts";
 
 export type IngestStatus = "parsed" | "ignored" | "unparsed";
 export interface IngestResult {
@@ -44,6 +44,9 @@ export function findDuplicate(ds: Dataset, n: NotificationIngest, p: ParsedNotif
   }
   return null;
 }
+
+export const notificationCommandId = async (epoch: string, notificationId: string): Promise<string> =>
+  `notif:${(await sha256Hex(`${epoch}|${notificationId}`)).slice(0, 40)}`;
 
 export async function ingestNotification(
   env: Env,
@@ -86,8 +89,10 @@ export async function ingestNotification(
 
   const txnId = ulid();
   const cmd: Command = {
-    // system command id, deterministic per notification (Id max length is 64)
-    id: `notif:${(await sha256Hex(n.id)).slice(0, 40)}`,
+    // System command id: deterministic per notification *and ledger epoch*. The command log survives
+    // resetLedger, so without the epoch a notification re-ingested after a reset would hit the logged
+    // command and be "replayed" without writing anything. (Id max length is 64.)
+    id: await notificationCommandId(await getEpoch(env.DB), n.id),
     name: "addProvisional",
     at: karachiNow(),
     args: {
@@ -142,5 +147,14 @@ export async function ingestNotification(
   });
   if (!run.result.ok)
     return ignore("unparsed", { error: run.result.error ?? null, message: run.result.message ?? null });
+  if (run.version === null) {
+    // the command was already in the log (replayed, nothing written): never report a transaction we didn't write
+    const prior = ds.transactions.find((t) => !t.deleted && t.notification_id === n.id);
+    if (prior) {
+      await writeMutations(env.DB, [record("parsed", prior.id)]);
+      return { id: n.id, status: "parsed", transaction_id: prior.id };
+    }
+    return ignore("unparsed", { error: "conflict", message: "notification command already applied" });
+  }
   return { id: n.id, status: "parsed", transaction_id: txnId };
 }

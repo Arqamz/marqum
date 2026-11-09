@@ -307,8 +307,55 @@ const notif = {
 }
 
 // ---- real notification formats (synthetic merchants/amounts/digits)
+const nid = (k: number) => `${"0".repeat(60)}${String(k).padStart(4, "0")}`;
+const spendText =
+  "You spent Rs. 1,500 online at G-9 (Test Bakery - Isd-rwp) Karachi Pk. Zero hesitation, we love it.";
+const sadaText =
+  "You spent PKR 1,234.00 at NetflixX12AB34CD56     Amsterdam     NLD. Your available balance is PKR 20500.50.";
+const SPEND = {
+  id: nid(12),
+  package: "com.nayapay.app",
+  title: "Card in action 💳",
+  text: spendText,
+  posted_at: "2026-11-08T13:01",
+};
+const SADA = {
+  id: nid(13),
+  package: "com.sadapay.app",
+  title: "Message from SadaPay",
+  text: sadaText,
+  posted_at: "2026-11-08T14:00",
+};
+
+/** Regression: the response is not enough — pull and require the rows to really exist on the server. */
+async function assertIngested(
+  what: string,
+  res: { status?: unknown; transaction_id?: unknown },
+  n: { id: string; posted_at: string },
+  amount: number,
+  balance: number | null = null,
+) {
+  check(res.status === "parsed" && typeof res.transaction_id === "string", `${what}: response parsed`, res);
+  await pullAll();
+  const t = replica.transactions?.get(res.transaction_id as string);
+  check(
+    t && !t.deleted && t.amount === amount && t.notification_id === n.id && t.source === "notification",
+    `${what}: transaction row persisted`,
+    t ?? live("transactions"),
+  );
+  const row = replica.notifications?.get(n.id);
+  check(
+    row?.status === "parsed" && row.transaction_id === res.transaction_id,
+    `${what}: notification row persisted`,
+    row,
+  );
+  if (balance !== null) {
+    const b = live("balances").find((x) => x.source === "notification" && x.as_of === n.posted_at);
+    check(b?.balance === balance, `${what}: notification balance row persisted`, live("balances"));
+  }
+}
+
 {
-  const nid = (k: number) => `${"0".repeat(60)}${String(k).padStart(4, "0")}`;
   const ingestN = (k: number, pkg: string, title: string, text: string, posted_at: string) =>
     api<Record<string, unknown>>("POST", "/api/ingest/notification", {
       id: nid(k),
@@ -334,14 +381,10 @@ const notif = {
     "2026-11-08T13:00",
   );
   check(auth.json.status === "ignored", "card authorization ignored", auth.json);
-  const spendText =
-    "You spent Rs. 1,500 online at G-9 (Test Bakery - Isd-rwp) Karachi Pk. Zero hesitation, we love it.";
-  const spend = await ingestN(12, "com.nayapay.app", "Card in action 💳", spendText, "2026-11-08T13:01");
-  check(spend.json.status === "parsed", "card-in-action spend parsed", spend.json);
-  const sadaText =
-    "You spent PKR 1,234.00 at NetflixX12AB34CD56     Amsterdam     NLD. Your available balance is PKR 20500.50.";
-  const sada = await ingestN(13, "com.sadapay.app", "Message from SadaPay", sadaText, "2026-11-08T14:00");
-  check(sada.json.status === "parsed", "SadaPay spend with balance parsed", sada.json);
+  const spend = await api("POST", "/api/ingest/notification", SPEND);
+  await assertIngested("ingest card-in-action spend", spend.json, SPEND, -150000);
+  const sada = await api("POST", "/api/ingest/notification", SADA);
+  await assertIngested("ingest SadaPay spend with balance", sada.json, SADA, -123400, 2050050);
   const dup = await ingestN(14, "com.sadapay.app", "Message from SadaPay", sadaText, "2026-11-08T14:01");
   check(
     dup.json.status === "ignored" && dup.json.duplicate_of === nid(13),
@@ -388,11 +431,8 @@ const notif = {
   const reOk = await api<{ results: { status: string }[] }>("POST", "/api/admin/reingest", re, {
     "X-Step-Up": su.json.step_up_token,
   });
-  check(
-    reOk.status === 200 && reOk.json.results[0]?.status === "parsed",
-    "admin reingest runs the ingest path",
-    reOk.json,
-  );
+  check(reOk.status === 200, "admin reingest", reOk.json);
+  await assertIngested("admin reingest", reOk.json.results[0] ?? {}, re.items[0] as typeof SPEND, -170000);
   const early = await api<{ results: { status: string; reason?: string }[] }>(
     "POST",
     "/api/admin/reingest",
@@ -588,6 +628,22 @@ await push([importCmd(await readCsvStatement(NAYA_OCT), "m-10-2026.csv")]);
     "b/f carry row for SadaPay after reset",
     live("transactions"),
   );
+
+  // Regression (prod bug): notifications ingested before a reset must ingest again afterwards — the command
+  // log survives resets, so the ingest command id has to change with the epoch.
+  const suR = await api<{ step_up_token: string }>("POST", "/api/auth/step-up/passcode", {
+    passcode: PASSCODE,
+  });
+  const again = await api<{ results: Record<string, unknown>[] }>(
+    "POST",
+    "/api/admin/reingest",
+    { items: [SPEND, SADA] },
+    { "X-Step-Up": suR.json.step_up_token },
+  );
+  await assertIngested("reingest after reset (spend)", again.json.results[0] ?? {}, SPEND, -150000);
+  await assertIngested("reingest after reset (SadaPay)", again.json.results[1] ?? {}, SADA, -123400, 2050050);
+  const first = await api("POST", "/api/ingest/notification", notif);
+  await assertIngested("normal ingest after reset", first.json, notif, -125000);
 
   const su2 = await api<{ step_up_token: string }>("POST", "/api/auth/step-up/passcode", {
     passcode: PASSCODE,
