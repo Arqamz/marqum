@@ -1,8 +1,10 @@
 import type { AccountId, Statement, Transaction } from "@marqum/schema";
+import { carryId } from "./carry.ts";
 import { extractCounterparty } from "./classify.ts";
-import { liveTxns, loanStatuses } from "./ledger.ts";
+import { isClosed, trackingStart, trackingStartMonth } from "./dataset.ts";
+import { assertions, balanceAt, liveTxns, loanStatuses } from "./ledger.ts";
 import { formatRs } from "./money.ts";
-import { addDays, addMonths, dateOf, dayLabel, monthOf, monthRange } from "./time.ts";
+import { addDays, addMonths, dateOf, dayLabel, monthLabel, monthOf, monthRange } from "./time.ts";
 import type { ChecklistItem, CloseChecklist, Dataset } from "./types.ts";
 
 /** Openings/closings of adjacent statements may differ by at most Rs 1 (rounding in bank PDFs). */
@@ -45,64 +47,33 @@ export function uncoveredRanges(
   return gaps;
 }
 
-/** Wallet balance at the end of `date` from statements, or null if it can't be derived. */
-export function closingBalanceOn(ds: Dataset, account: AccountId, date: string): number | null {
-  const stmts = ds.statements.filter((s) => !s.deleted && s.account_id === account);
-  const covering = stmts
-    .filter((s) => s.period_from <= date && s.period_to >= date && s.closing !== null)
-    .sort((a, b) => a.period_to.localeCompare(b.period_to));
-  const c = covering[0];
-  if (c && c.closing !== null) {
-    let bal = c.closing;
-    for (const t of liveTxns(ds))
-      if (
-        t.account_id === account &&
-        t.occurred_at > `${date}T23:59` &&
-        t.occurred_at <= `${c.period_to}T23:59`
-      )
-        bal -= t.amount;
-    return bal;
-  }
-  const next = stmts.find((s) => s.period_from === addDays(date, 1) && s.opening !== null);
-  if (next?.opening != null) return next.opening;
-  return balanceFromAnchors(ds, account, date, stmts);
+/** Ledger closing balance of a wallet at `date` 23:59 (b/f + transactions; the c/f itself excluded). */
+export function closingBalanceOn(ds: Dataset, account: AccountId, date: string): number {
+  return balanceAt(ds, account, `${date}T23:59`);
 }
 
-/**
- * Balance at `date` 23:59 from any anchor (statement or manual), as in netPosition. Requires the month of `date`
- * to be fully covered by statements, so the transactions bridging the anchor and month end are complete.
- * Prefers the latest anchor at/before month end (statements must cover from its day to month end); otherwise
- * the earliest anchor after month end, subtracting the transactions in between.
- */
-function balanceFromAnchors(
-  ds: Dataset,
-  account: AccountId,
-  date: string,
-  stmts: Statement[],
-): number | null {
-  if (uncoveredRanges(stmts, `${monthOf(date)}-01`, date).length) return null;
-  const end = `${date}T23:59`;
-  const anchors = ds.balances
-    .filter((b) => !b.deleted && b.account_id === account)
-    .sort((a, b) => a.as_of.localeCompare(b.as_of) || a.id.localeCompare(b.id));
-  const txns = liveTxns(ds).filter((t) => t.account_id === account);
-  const before = anchors.filter((b) => b.as_of <= end).at(-1);
-  if (before && uncoveredRanges(stmts, dateOf(before.as_of), date).length === 0) {
-    let bal = before.balance;
-    for (const t of txns) if (t.occurred_at > before.as_of && t.occurred_at <= end) bal += t.amount;
-    return bal;
-  }
-  const after = anchors.find((b) => b.as_of > end);
-  if (after) {
-    let bal = after.balance;
-    for (const t of txns) if (t.occurred_at > end && t.occurred_at <= after.as_of) bal -= t.amount;
-    return bal;
-  }
-  return null;
+/** Checklist for a month before tracking start: there is nothing to close. */
+function beforeTracking(ds: Dataset, month: string): CloseChecklist {
+  const start = trackingStart(ds);
+  return {
+    month,
+    items: [
+      {
+        id: "before_tracking",
+        ok: false,
+        severity: "block",
+        label: `${monthLabel(month)} is before tracking started (${dayLabel(start)} ${start.slice(0, 4)}) — nothing to close`,
+      },
+    ],
+    can_close: false,
+    closable_from: `${addMonths(month, 1)}-01`,
+  };
 }
 
 export function closeChecklist(ds: Dataset, month: string, now: string): CloseChecklist {
+  if (month < trackingStartMonth(ds)) return beforeTracking(ds, month);
   const { from, to } = monthRange(month);
+  const start = trackingStart(ds);
   const closable_from = `${addMonths(month, 1)}-01`;
   const q = `month=${month}`;
   const items: ChecklistItem[] = [];
@@ -115,6 +86,18 @@ export function closeChecklist(ds: Dataset, month: string, now: string): CloseCh
     severity: "block",
     label: ended ? "Month has ended" : `Month ends ${dayLabel(to)} — close from ${dayLabel(closable_from)}`,
   });
+
+  const prev = addMonths(month, -1);
+  if (prev >= trackingStartMonth(ds)) {
+    const prevClosed = isClosed(ds, prev);
+    items.push({
+      id: "previous_closed",
+      ok: prevClosed,
+      severity: "block",
+      label: prevClosed ? `${monthLabel(prev)} is closed` : `Close ${monthLabel(prev)} first`,
+      action: `/close?month=${prev}`,
+    });
+  }
 
   for (const acc of accountIds(ds)) {
     const name = accountName(ds, acc);
@@ -138,7 +121,12 @@ export function closeChecklist(ds: Dataset, month: string, now: string): CloseCh
     const name = accountName(ds, acc);
     const relevant = ds.statements
       .filter(
-        (s) => !s.deleted && s.account_id === acc && s.period_to >= addDays(from, -1) && s.period_from <= to,
+        (s) =>
+          !s.deleted &&
+          s.account_id === acc &&
+          s.period_to >= addDays(from, -1) &&
+          s.period_to >= start &&
+          s.period_from <= to,
       )
       .sort((a, b) => a.period_from.localeCompare(b.period_from) || a.period_to.localeCompare(b.period_to));
     for (const s of relevant) {
@@ -201,16 +189,64 @@ export function closeChecklist(ds: Dataset, month: string, now: string): CloseCh
   for (const acc of accountIds(ds)) {
     const name = accountName(ds, acc);
     const bal = closingBalanceOn(ds, acc, to);
+    // The ledger closing is trustworthy once the opening is established (from a statement, or set by you) or
+    // something asserts a balance we can reconcile against.
+    const bf = ds.transactions.find((t) => t.id === carryId("bf", acc, trackingStartMonth(ds)) && !t.deleted);
+    const established = (bf?.reason ?? null) !== null || assertions(ds, acc).length > 0;
     items.push({
       id: `closing_${acc}`,
-      ok: bal !== null,
+      ok: established,
+      severity: "block",
+      label: established
+        ? `${name} closing balance on ${dayLabel(to)}: ${formatRs(bal)}`
+        : `${name} opening balance unknown — set it or record your current balance`,
+      action: established ? `/wallet/${acc}?${q}` : `/settings/opening?account=${acc}`,
+    });
+
+    const mismatches: string[] = [];
+    let compared = 0;
+    for (const st of ds.statements) {
+      if (st.deleted || st.account_id !== acc || st.closing === null) continue;
+      if (st.period_to < from || st.period_to > to || st.period_to < start) continue;
+      compared++;
+      const ledger = closingBalanceOn(ds, acc, st.period_to);
+      if (Math.abs(ledger - st.closing) > CHAIN_TOLERANCE)
+        mismatches.push(
+          `${name} ledger ${formatRs(ledger)} ≠ statement closing ${formatRs(st.closing)} on ${dayLabel(
+            st.period_to,
+          )} (off by ${formatRs(Math.abs(ledger - st.closing))})`,
+        );
+    }
+    items.push({
+      id: `reconcile_${acc}`,
+      ok: mismatches.length === 0,
       severity: "block",
       label:
-        bal !== null
-          ? `${name} closing balance on ${dayLabel(to)}: ${formatRs(bal)}`
-          : `${name} closing balance on ${dayLabel(to)} unknown — import a statement covering it`,
-      action: `/statements?account=${acc}&${q}`,
+        mismatches.length > 0
+          ? (mismatches[0] as string)
+          : compared > 0
+            ? `${name} ledger matches the statement closing`
+            : `${name}: no statement closing to reconcile`,
+      ...(mismatches.length > 1 ? { detail: mismatches.join("\n") } : {}),
+      action: `/wallet/${acc}?${q}`,
     });
+
+    const manual = assertions(ds, acc)
+      .filter((b) => b.source === "manual" && monthOf(b.as_of) === month)
+      .at(-1);
+    if (manual) {
+      const gap = manual.balance - balanceAt(ds, acc, manual.as_of);
+      items.push({
+        id: `unaccounted_${acc}`,
+        ok: Math.abs(gap) <= CHAIN_TOLERANCE,
+        severity: "warn",
+        label:
+          Math.abs(gap) <= CHAIN_TOLERANCE
+            ? `${name} matches the balance you entered on ${dayLabel(manual.as_of)}`
+            : `${name}: ${formatRs(Math.abs(gap))} unaccounted vs the balance you entered on ${dayLabel(manual.as_of)}`,
+        action: `/wallet/${acc}?${q}`,
+      });
+    }
   }
 
   const noReason = inMonth.filter(

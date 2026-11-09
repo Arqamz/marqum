@@ -27,7 +27,7 @@
 
     <!-- Launch theme: Android 12+ system splash = indigo with the qāf mark. -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/marqum_indigo</item>
+        <item name="windowSplashScreenBackground">@color/marqum_ink</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
         <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
         <item name="android:windowBackground">@drawable/splash</item>

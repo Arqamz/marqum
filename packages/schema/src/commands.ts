@@ -88,6 +88,7 @@ export const Command = z.discriminatedUnion("name", [
       nature: z.enum(["fixed", "variable"]),
       hidden: z.boolean(),
       sort: z.number().int(),
+      budget: Paisa.nullable().optional(),
     }),
   ),
   cmd(
@@ -163,6 +164,15 @@ export const Command = z.discriminatedUnion("name", [
   cmd("setSetting", z.object({ key: z.string(), value: z.string() })),
   cmd("closeMonth", z.object({ month: Month })),
   cmd("reopenMonth", z.object({ month: Month, reason: z.string().min(3) })),
+  /**
+   * Wipes ledger data (transactions, statements, balances, months, notifications, goal_moves) and restarts
+   * tracking at `tracking_start` (first of a month). Keeps configuration (categories, rules, counterparties,
+   * recurring, loans, goals, settings). Requires step-up. The server bumps the ledger epoch so every
+   * client discards its local replica and re-pulls.
+   */
+  cmd("resetLedger", z.object({ tracking_start: LocalDate, confirm: z.literal("RESET") })),
+  /** Sets the opening balance brought forward for the first tracked month of an account (b/f entry). */
+  cmd("setOpeningBalance", z.object({ account_id: AccountId, amount: Paisa })),
 ]);
 export type Command = z.infer<typeof Command>;
 export type CommandName = Command["name"];
@@ -170,3 +180,5 @@ export type CommandArgs<N extends CommandName> = Extract<Command, { name: N }>["
 
 /** Commands allowed on a closed month (with step-up auth). Everything else is rejected. */
 export const STEP_UP_ALLOWED: readonly CommandName[] = ["tagTransaction", "reopenMonth"];
+/** Commands that always require step-up, regardless of month. */
+export const STEP_UP_REQUIRED: readonly CommandName[] = ["resetLedger", "reopenMonth"];

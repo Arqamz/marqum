@@ -11,7 +11,20 @@ import {
 } from "../src/analytics.ts";
 import { applyMutations } from "../src/dataset.ts";
 import type { Dataset } from "../src/types.ts";
-import { bal, cp, goal, loan, move, prov, recurring, seeded, stmt, txn, withRows } from "./builders.ts";
+import {
+  bal,
+  cp,
+  goal,
+  loan,
+  move,
+  prov,
+  recurring,
+  seeded,
+  stmt,
+  txn,
+  withOpening,
+  withRows,
+} from "./builders.ts";
 
 const NOW = "2026-11-15T12:00";
 
@@ -25,13 +38,15 @@ describe("spendOf", () => {
   });
 });
 
-describe("wallet positions", () => {
-  it("balance = latest anchor + later transactions; provisional delta tracked", () => {
-    const ds = withRows(seeded(), {
-      statements: [stmt("nayapay", "2026-11-01", "2026-11-07", { closing: 1000000 })],
-      balances: [bal("nayapay", "2026-11-07T23:59", 1000000, { source: "statement_close" })],
+describe("wallet positions (ledger-derived)", () => {
+  const base = () => withOpening(seeded("2026-11-01"), { nayapay: 500000 });
+
+  it("balance = b/f + every tracked transaction; balance entries are assertions, not anchors", () => {
+    const ds = withRows(base(), {
+      statements: [stmt("nayapay", "2026-11-01", "2026-11-07", { closing: 999999 })],
+      balances: [bal("nayapay", "2026-11-07T23:59", 999999, { source: "statement_close" })],
       transactions: [
-        txn({ occurred_at: "2026-11-05T10:00", amount: -999999 }), // before the anchor: already in it
+        txn({ occurred_at: "2026-10-30T10:00", amount: -777777 }), // before tracking start: doesn't exist
         txn({ occurred_at: "2026-11-08T10:00", amount: -20000 }),
         prov({ occurred_at: "2026-11-09T10:00", amount: -10000 }),
         prov({ occurred_at: "2026-11-09T11:00", amount: 5000, status: "disputed" }),
@@ -39,7 +54,7 @@ describe("wallet positions", () => {
     });
     const w = netPosition(ds, NOW).wallets.find((x) => x.account_id === "nayapay");
     expect(w).toMatchObject({
-      balance: 975000,
+      balance: 475000,
       provisional_delta: -5000,
       verified_until: "2026-11-07",
       unaccounted: 0,
@@ -47,20 +62,17 @@ describe("wallet positions", () => {
       role: "pocket",
     });
   });
-  it("a manual entry is the newest anchor and reports unaccounted against the previous one", () => {
-    const ds = withRows(seeded(), {
-      balances: [
-        bal("nayapay", "2026-11-07T23:59", 100000, { source: "statement_close" }),
-        bal("nayapay", "2026-11-09T12:00", 70000),
-      ],
+  it("unaccounted = latest manual balance − ledger balance at that moment", () => {
+    const ds = withRows(base(), {
+      balances: [bal("nayapay", "2026-11-09T12:00", 470000)],
       transactions: [
         txn({ occurred_at: "2026-11-08T10:00", amount: -20000 }),
         prov({ occurred_at: "2026-11-10T10:00", amount: -5000 }),
       ],
     });
     const w = netPosition(ds, NOW).wallets.find((x) => x.account_id === "nayapay");
-    // computed at 9 Nov 12:00 = 100,000 − 20,000 = 80,000; typed 70,000 → −10,000 unaccounted
-    expect(w).toMatchObject({ balance: 65000, unaccounted: -10000, provisional_delta: -5000 });
+    // ledger at 9 Nov 12:00 = 500,000 − 20,000 = 480,000; typed 470,000 → −10,000 unaccounted
+    expect(w).toMatchObject({ balance: 475000, unaccounted: -10000, provisional_delta: -5000 });
   });
   it("vault floor = goal envelopes + active SadaPay recurring", () => {
     const g = goal({ target: 1000000, monthly: 100000 });
@@ -81,10 +93,9 @@ describe("loans and net position", () => {
   const l = loan({ id: "L1", principal: 9000000, installment: 900000, started_on: "2026-08-10" });
   const repay = (on: string) =>
     txn({ account_id: "sadapay", occurred_at: on, amount: -900000, flow: "loan_repay", loan_id: "L1" });
-  const ds = withRows(seeded(), {
+  const ds = withRows(withOpening(seeded(), { sadapay: 3800000, nayapay: 500000 }), {
     loans: [l],
     transactions: [repay("2026-09-05T10:00"), repay("2026-10-05T10:00")],
-    balances: [bal("sadapay", "2026-11-10T10:00", 2000000), bal("nayapay", "2026-11-10T10:00", 500000)],
   });
   it("repaid, outstanding, payoff month and progress", () => {
     const n = netPosition(ds, NOW);

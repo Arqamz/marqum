@@ -3,11 +3,16 @@
  * re-exported from analytics.ts / planning.ts. Formulas are documented in docs/FORMULAS.md.
  */
 import type { AccountId, BalanceEntry, Goal, Loan, Transaction } from "@marqum/schema";
-import { numericSetting } from "./dataset.ts";
+import { isCf } from "./carry.ts";
+import { numericSetting, trackingStart, trackingStartMonth } from "./dataset.ts";
 import { addMonths, completeMonthsBefore, monthOf } from "./time.ts";
 import type { Dataset, GoalStatus, LoanStatus, WalletPosition } from "./types.ts";
 
-export const liveTxns = (ds: Dataset): Transaction[] => ds.transactions.filter((t) => !t.deleted);
+/** Non-deleted transactions on or after tracking start. Everything before tracking start does not exist. */
+export function liveTxns(ds: Dataset): Transaction[] {
+  const start = `${trackingStart(ds)}T00:00`;
+  return ds.transactions.filter((t) => !t.deleted && t.occurred_at >= start);
+}
 
 /** Positive spend for spend/fee outflows, 0 otherwise. Reimbursements are handled in category math. */
 export function spendOf(t: Transaction): number {
@@ -39,33 +44,50 @@ export function subtreeIds(ds: Dataset, categoryId: string): Set<string> {
 }
 
 /**
- * Monthly spend of a category subtree: Σ spendOf − Σ linked reimbursements (in the reimbursement's month),
- * floored at 0 per month.
+ * Spend events for a set of category ids: +spendOf for expenses tagged with one of the ids, −amount for
+ * reimbursements whose linked expense is tagged with one of the ids (dated when the money came back).
  */
-export function categoryMonthlySpend(ds: Dataset, categoryId: string): Map<string, number> {
-  const ids = subtreeIds(ds, categoryId);
+export function spendEvents(ds: Dataset, ids: Set<string>): { at: string; value: number }[] {
   const txns = liveTxns(ds);
-  const byId = new Map(txns.map((t) => [t.id, t]));
-  const out = new Map<string, number>();
-  const add = (m: string, v: number) => out.set(m, (out.get(m) ?? 0) + v);
+  const byId = new Map(ds.transactions.map((t) => [t.id, t]));
+  const out: { at: string; value: number }[] = [];
   for (const t of txns) {
     if (t.category_id && ids.has(t.category_id)) {
       const s = spendOf(t);
-      if (s) add(monthOf(t.occurred_at), s);
+      if (s) out.push({ at: t.occurred_at, value: s });
     }
     if (t.flow === "reimbursement" && t.amount > 0 && t.linked_txn_id) {
       const e = byId.get(t.linked_txn_id);
-      if (e?.category_id && ids.has(e.category_id)) add(monthOf(t.occurred_at), -t.amount);
+      if (e?.category_id && ids.has(e.category_id)) out.push({ at: t.occurred_at, value: -t.amount });
     }
+  }
+  return out;
+}
+
+/** Monthly spend for a set of category ids, floored at 0 per month. */
+export function monthlySpendOf(ds: Dataset, ids: Set<string>): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const e of spendEvents(ds, ids)) {
+    const m = monthOf(e.at);
+    out.set(m, (out.get(m) ?? 0) + e.value);
   }
   for (const [m, v] of out) if (v < 0) out.set(m, 0);
   return out;
 }
 
-/** First month with any transaction, or null. */
+/**
+ * Monthly spend of a category subtree: Σ spendOf − Σ linked reimbursements (in the reimbursement's month),
+ * floored at 0 per month.
+ */
+export function categoryMonthlySpend(ds: Dataset, categoryId: string): Map<string, number> {
+  return monthlySpendOf(ds, subtreeIds(ds, categoryId));
+}
+
+/** First tracked month with any non-carry transaction, or null. */
 export function firstDataMonth(ds: Dataset): string | null {
   let first: string | null = null;
   for (const t of liveTxns(ds)) {
+    if (t.flow === "carry") continue;
     const m = monthOf(t.occurred_at);
     if (first === null || m < first) first = m;
   }
@@ -74,11 +96,15 @@ export function firstDataMonth(ds: Dataset): string | null {
 
 export const averageWindow = (ds: Dataset): number => (numericSetting(ds, "avg_window") === 3 ? 3 : 6);
 
-/** Months used for averages before `month`: the window's complete months on/after the first data month. */
+/**
+ * Months used for averages before `month`: the window's complete months on/after tracking start and on/after
+ * the first month with data.
+ */
 export function averageMonths(ds: Dataset, month: string): string[] {
   const first = firstDataMonth(ds);
   if (first === null) return [];
-  return completeMonthsBefore(month, averageWindow(ds)).filter((m) => m >= first);
+  const start = trackingStartMonth(ds);
+  return completeMonthsBefore(month, averageWindow(ds)).filter((m) => m >= first && m >= start);
 }
 
 export function categoryAverage(
@@ -93,13 +119,27 @@ export function categoryAverage(
   return { average: Math.round(total / months.length), months_in_average: months.length };
 }
 
-const ANCHOR_RANK: Record<BalanceEntry["source"], number> = {
-  manual: 0,
-  statement_open: 1,
-  statement_close: 2,
-};
-const byAsOf = (a: BalanceEntry, b: BalanceEntry) =>
-  a.as_of.localeCompare(b.as_of) || ANCHOR_RANK[a.source] - ANCHOR_RANK[b.source] || a.id.localeCompare(b.id);
+/**
+ * Ledger balance at an instant: Σ tracked transactions with occurred_at ≤ at. A c/f row dated exactly `at` is
+ * left out, so the balance at a month's last 23:59 is that month's closing (c/f and the next b/f cancel later).
+ */
+export function balanceAt(ds: Dataset, account: AccountId, at: string): number {
+  let bal = 0;
+  for (const t of liveTxns(ds)) {
+    if (t.account_id !== account || t.occurred_at > at) continue;
+    if (t.occurred_at === at && isCf(t)) continue;
+    bal += t.amount;
+  }
+  return bal;
+}
+
+/** Balance assertions (statement/manual balance entries) on or after tracking start, oldest first. */
+export function assertions(ds: Dataset, account: AccountId): BalanceEntry[] {
+  const start = `${trackingStart(ds)}T00:00`;
+  return ds.balances
+    .filter((b) => !b.deleted && b.account_id === account && b.as_of >= start)
+    .sort((a, b) => a.as_of.localeCompare(b.as_of) || a.id.localeCompare(b.id));
+}
 
 /** Σ goal envelopes (each floored at 0) + Σ active SadaPay recurring amounts (next month's bills). */
 export function vaultFloor(ds: Dataset): number {
@@ -115,29 +155,17 @@ export function vaultFloor(ds: Dataset): number {
 export function walletPosition(ds: Dataset, account: AccountId): WalletPosition {
   const acc = ds.accounts.find((a) => a.id === account);
   const role = acc?.role ?? (account === "sadapay" ? "vault" : "pocket");
-  const anchors = ds.balances.filter((b) => !b.deleted && b.account_id === account).sort(byAsOf);
-  const latest = anchors.at(-1) ?? null;
-  const txns = liveTxns(ds).filter((t) => t.account_id === account);
-  let balance = latest?.balance ?? 0;
+  let balance = 0;
   let provisional_delta = 0;
-  for (const t of txns) {
-    if (latest && t.occurred_at <= latest.as_of) continue;
+  for (const t of liveTxns(ds)) {
+    if (t.account_id !== account) continue;
     balance += t.amount;
     if (t.status !== "verified") provisional_delta += t.amount;
   }
-  let unaccounted = 0;
-  if (latest?.source === "manual") {
-    const prev = anchors
-      .slice(0, -1)
-      .filter((a) => a.as_of < latest.as_of)
-      .at(-1);
-    if (prev) {
-      let computed = prev.balance;
-      for (const t of txns)
-        if (t.occurred_at > prev.as_of && t.occurred_at <= latest.as_of) computed += t.amount;
-      unaccounted = latest.balance - computed;
-    }
-  }
+  const manual = assertions(ds, account)
+    .filter((b) => b.source === "manual")
+    .at(-1);
+  const unaccounted = manual ? manual.balance - balanceAt(ds, account, manual.as_of) : 0;
   let verified_until: string | null = null;
   for (const s of ds.statements)
     if (!s.deleted && s.account_id === account && (verified_until === null || s.period_to > verified_until))

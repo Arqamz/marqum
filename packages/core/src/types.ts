@@ -153,14 +153,74 @@ export interface BudgetModel {
   floor: number; // Σ goal envelopes + next month's fixed bills
   free_savings: number; // SadaPay balance − floor (can be negative)
   lines: { label: string; amount: number; kind: "income" | "committed" | "variable" | "goals" | "surplus" }[];
+  /** planned monthly spend per top-level category and where the number came from */
+  categories: PlannedCategory[];
+}
+
+export interface PlannedCategory {
+  category_id: string;
+  name: string;
+  nature: "fixed" | "variable";
+  /** positive paisa, after levers/adjustments */
+  planned: number;
+  /** budget = Category.budget; average = history average; none = neither (0); recurring = fixed category covered by Recurring rows (not added again) */
+  source: "budget" | "average" | "none" | "recurring";
 }
 
 export interface WhatIfInput {
   price: number;
   mode: "save" | "loan";
   loan_months?: number;
-  /** e.g. [{category_id:"food", pct:-20}] reduces Food's average by 20% */
+  /** loan mode: monthly installment instead of loan_months (months = ⌈price / installment⌉) */
+  installment?: number;
+  /** loan mode: custom uneven repayments; overrides installment/loan_months */
+  schedule?: { month: string; amount: number }[];
+  /** e.g. [{category_id:"food", pct:-20}] reduces Food's planned spend by 20% */
   levers?: { category_id: string; pct: number }[];
+  /** per-call overrides of the forecast assumptions (defaults: defaultAssumptions) */
+  assumptions?: Partial<ForecastAssumptions>;
+  /** save: earliest month to buy; loan: first repayment month (default next month) */
+  start_month?: string;
+}
+
+/** Low/expected/high value. For spending, low is the good case; for surplus/savings, low is the bad case. */
+export interface Band {
+  expected: number;
+  low: number;
+  high: number;
+}
+
+export interface ForecastAssumptions {
+  /** months projected after the current month (default 12) */
+  horizon_months: number;
+  /** step changes to monthly income from a month on; base = setting income_monthly */
+  income: { from: string; amount: number }[];
+  /** % applied to all variable planned spend (−10 = spend 10% less) */
+  spend_adjust_pct: number;
+  /** % per category (applied before spend_adjust_pct) */
+  category_adjust: { category_id: string; pct: number }[];
+  /** known future items: + income, − expense */
+  one_offs: { month: string; amount: number; label: string }[];
+  /** width of the variable-spend band: low ×0.5, normal ×1, high ×1.5 */
+  uncertainty: "low" | "normal" | "high";
+}
+
+export interface ProjectionMonth {
+  month: string;
+  income: number;
+  /** recurring fixed charges + planned fixed categories not covered by recurring */
+  fixed: number;
+  variable: Band;
+  goals: number;
+  /** loan installments due this month */
+  loans: number;
+  one_offs: number;
+  /** income − fixed − variable − goals − loans + one_offs; low = bad month (high spend) */
+  surplus: Band;
+  /** cumulative free SadaPay savings at month end (starts from today's free savings) */
+  savings: Band;
+  /** outstanding debt at month end */
+  debt: number;
 }
 
 export interface WhatIfResult {
@@ -174,6 +234,14 @@ export interface WhatIfResult {
   goal_delays: { goal_id: string; name: string; months: number }[];
   /** waterfall from income to what's left after the purchase plan */
   waterfall: { label: string; amount: number }[];
+  /** month-by-month projection with the purchase applied */
+  projection: ProjectionMonth[];
+  /** save mode: month the price is reached in the good / expected / bad scenario (null = not within horizon) */
+  ready_month_range: { best: string | null; expected: string | null; worst: string | null };
+  /** loan mode: months where the bad-case surplus can't cover the repayment */
+  risk_months: string[];
+  /** solid = works in the bad case; likely = in the expected case; risky = only in the good case; no = never */
+  confidence: "solid" | "likely" | "risky" | "no";
 }
 
 export interface SplitSuggestion {
@@ -214,4 +282,68 @@ export interface UnverifiedSummary {
   since: string | null; // earliest provisional occurred_at
   disputed: number;
   by_account: Record<AccountId, { count: number; since: string | null }>;
+}
+
+/** One wallet's month as an account: b/f → in → out → closing (→ c/f once the month is closed). */
+export interface MonthLedger {
+  month: string;
+  /** b/f row amount, or (open month without one) the previous month's computed closing */
+  brought_forward: number;
+  brought_forward_virtual: boolean;
+  /** Σ positive non-carry amounts */
+  inflow: number;
+  /** Σ |negative non-carry amounts| (positive number) */
+  outflow: number;
+  /** brought_forward + inflow − outflow */
+  closing: number;
+  /** c/f row amount as booked (= −closing), or null while the month is open */
+  carried_forward: number | null;
+  /** non-carry transactions of the month, oldest first */
+  transactions: Transaction[];
+}
+
+export interface WalletMonthDetail extends MonthLedger {
+  account_id: AccountId;
+  /** every day of the month: net flow (non-carry) and closing balance at 23:59 */
+  daily: { date: string; net: number; closing: number }[];
+}
+
+export interface BreakdownPart {
+  /** child category id, or `${parent}.__other` for spend tagged directly with the parent */
+  id: string;
+  /** child name, or "Other <Parent>" */
+  name: string;
+  spent: number;
+  average: number | null;
+  /** spent / total (0..1; 0 when total is 0) */
+  share: number;
+}
+
+export interface CategoryBreakdown {
+  category: Category;
+  total: number;
+  average: number | null;
+  budget: number | null;
+  parts: BreakdownPart[];
+}
+
+export interface CategoryMonthDetail {
+  month: string;
+  total: number;
+  average: number | null;
+  /** every day of the month (spend net of reimbursements that day) */
+  daily: { date: string; value: number }[];
+  prev_month_total: number;
+  /** (total − prev) / prev × 100, one decimal; null when prev is 0 */
+  change_pct: number | null;
+  parts: BreakdownPart[];
+}
+
+export interface Allocation {
+  income: number;
+  sadapay: number;
+  nayapay: number;
+  /** user = setting allocation_sadapay; suggested = computed */
+  source: "user" | "suggested";
+  suggested: SplitSuggestion;
 }

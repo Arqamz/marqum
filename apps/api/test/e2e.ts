@@ -45,19 +45,33 @@ async function api<T = Record<string, unknown>>(
 }
 
 type Row = Record<string, unknown> & { id: string };
-type Pull = { version: number; changes: Record<string, Row[]>; more: boolean };
+type Pull = { version: number; changes: Record<string, Row[]>; more: boolean; epoch: string };
 type Push = {
   results: { id: string; ok: boolean; error?: string; message?: string; result?: Record<string, unknown> }[];
   version: number;
 };
 
 let cursor = 0;
-const replica: Record<string, Map<string, Row>> = {};
+let epoch = "";
+let replica: Record<string, Map<string, Row>> = {};
 async function pullAll(): Promise<Record<string, Row[]>> {
-  const changed: Record<string, Row[]> = {};
+  let changed: Record<string, Row[]> = {};
   for (;;) {
     const { status, json } = await api<Pull>("GET", `/api/sync/pull?since=${cursor}`);
-    check(status === 200, `pull since=${cursor}`, json);
+    check(
+      status === 200 && typeof json.epoch === "string" && json.epoch.length > 0,
+      `pull since=${cursor}`,
+      json,
+    );
+    if (epoch && json.epoch !== epoch && cursor !== 0) {
+      // ledger was reset elsewhere: drop the replica and pull everything again (what clients do)
+      epoch = json.epoch;
+      replica = {};
+      changed = {};
+      cursor = 0;
+      continue;
+    }
+    epoch = json.epoch;
     for (const [tbl, rows] of Object.entries(json.changes)) {
       replica[tbl] ??= new Map();
       for (const r of rows) replica[tbl].set(r.id, r);
@@ -178,6 +192,20 @@ check(
   "seed: both accounts visible",
 );
 check(live("categories").length > 10 && live("rules").length > 5, "seed: categories and rules visible");
+
+// ---- start tracking in September so a past month can be imported and sealed
+{
+  const su = await api<{ step_up_token: string }>("POST", "/api/auth/step-up/passcode", {
+    passcode: PASSCODE,
+  });
+  check(su.status === 200 && su.json.step_up_token, "passcode step-up", su.json);
+  const r = await push(
+    [{ id: cmdId(), name: "resetLedger", at, args: { tracking_start: "2026-09-01", confirm: "RESET" } }],
+    { "X-Step-Up": su.json.step_up_token },
+  );
+  check(r.json.results[0]?.ok === true, "resetLedger → tracking starts 2026-09-01", r.json);
+  await pullAll();
+}
 
 // ---- import statements
 const naya = await readCsvStatement(NAYA_CSV);
@@ -308,14 +336,8 @@ await push([importCmd(await readCsvStatement(NAYA_OCT), "m-10-2026.csv")]);
     items: { id: string; ok: boolean; label: string; severity: string }[];
   }>("GET", "/api/months/2026-09/check");
   const blocking = json.items.filter((i) => !i.ok && i.severity === "block").map((i) => i.id);
-  if (blocking.join() === "closing_sadapay") {
-    // SadaPay statements carry no balances; until core's checklist accepts a manual balance entry as the
-    // confirmed closing balance, a month can't be sealed — so the seal path can't run end to end yet.
-    process.stdout.write(
-      "⚠ SKIPPED seal path: closeChecklist ignores the manual SadaPay balance (closing_sadapay)\n",
-    );
-    await sealedPathSkipped();
-  } else {
+  check(blocking.length === 0, "no blocking items", blocking);
+  {
     check(
       json.can_close === true,
       "September checklist passes",
@@ -339,6 +361,10 @@ await push([importCmd(await readCsvStatement(NAYA_OCT), "m-10-2026.csv")]);
     check(
       snap.status === 200 && body.length > 100 && snap.headers.get("x-snapshot-sha256") === m.snapshot_sha256,
       "snapshot served from R2",
+    );
+    check(
+      body.includes("carry:cf:") && body.includes("carry:bf:"),
+      "snapshot includes the c/f and b/f carry rows",
     );
 
     const retag: Command = {
@@ -366,15 +392,118 @@ await push([importCmd(await readCsvStatement(NAYA_OCT), "m-10-2026.csv")]);
   }
 }
 
-async function sealedPathSkipped() {
+// ---- ledger reset (step-up only; keeps configuration, wipes ledger, bumps epoch)
+{
+  await push([
+    {
+      id: cmdId(),
+      name: "upsertRecurring",
+      at,
+      args: {
+        recurring_id: "e2e-rec-1",
+        name: "Test VPS",
+        account_id: "sadapay",
+        category_id: "subscriptions.vps",
+        counterparty_id: null,
+        amount: 150000,
+        day_of_month: 5,
+        active: true,
+      },
+    },
+  ]);
+  await pullAll();
+  const epochBefore = epoch;
+  check(
+    live("recurring").some((r) => r.id === "e2e-rec-1"),
+    "recurring created before reset",
+  );
+  const resetCmd: Command = {
+    id: cmdId(),
+    name: "resetLedger",
+    at,
+    args: { tracking_start: "2026-11-01", confirm: "RESET" },
+  };
+  const denied = await push([resetCmd]);
+  check(
+    denied.json.results[0]?.ok === false && denied.json.results[0]?.error === "step_up_required",
+    "resetLedger without step-up rejected",
+    denied.json,
+  );
+  const adminDenied = await api("POST", "/api/admin/reset", {
+    tracking_start: "2026-11-01",
+    confirm: "RESET",
+  });
+  check(
+    adminDenied.status === 403 && adminDenied.json.error === "step_up_required",
+    "admin reset without step-up → 403",
+    adminDenied.json,
+  );
+
   const su = await api<{ step_up_token: string }>("POST", "/api/auth/step-up/passcode", {
     passcode: PASSCODE,
   });
-  check(su.status === 200 && su.json.step_up_token, "passcode step-up", su.json);
-  const bad = await api("POST", "/api/auth/step-up/passcode", { passcode: "not-the-passcode" });
-  check(bad.status === 401, "wrong step-up passcode → 401", bad.json);
-  const snap = await api("GET", "/api/months/2026-10/snapshot");
-  check(snap.status === 404 && snap.json.error === "not_found", "no snapshot for an open month", snap.json);
+  const ok = await push([resetCmd], { "X-Step-Up": su.json.step_up_token });
+  const r = ok.json.results[0];
+  check(
+    r?.ok === true && typeof r.result?.backup_key === "string" && r.result.epoch !== epochBefore,
+    "resetLedger with step-up",
+    ok.json,
+  );
+  process.stdout.write(`RESET_KEY=${String(r?.result?.backup_key)}\n`);
+
+  const delta = await api<Pull>("GET", `/api/sync/pull?since=${cursor}`);
+  check(delta.json.epoch !== epochBefore, "pull reports the new epoch");
+  await pullAll(); // sees the epoch change → full re-pull from 0
+  check(
+    !live("transactions").some((t) => t.flow !== "carry"),
+    "ledger wiped (only carry rows remain)",
+    live("transactions"),
+  );
+  check(
+    live("statements").length === 0 && live("notifications").length === 0 && live("balances").length === 0,
+    "statements/notifications/balances wiped",
+  );
+  check(
+    ![...(replica.transactions?.values() ?? [])].some((t) => t.deleted),
+    "no ledger tombstones after reset (hard-deleted)",
+  );
+  check(
+    live("categories").length > 10 && live("recurring").some((x) => x.id === "e2e-rec-1"),
+    "categories and recurring kept",
+  );
+  check(
+    live("settings").find((x) => x.id === "tracking_start")?.value === "2026-11-01",
+    "tracking_start set",
+    live("settings"),
+  );
+
+  const ob = await push([
+    { id: cmdId(), name: "setOpeningBalance", at, args: { account_id: "sadapay", amount: 500000 } },
+  ]);
+  check(ob.json.results[0]?.ok === true, "setOpeningBalance", ob.json);
+  await pullAll();
+  const bf = live("transactions").filter((t) => t.flow === "carry" && t.account_id === "sadapay");
+  check(
+    bf.some((t) => t.amount === 500000 && t.source === "system"),
+    "b/f carry row for SadaPay after reset",
+    live("transactions"),
+  );
+
+  const su2 = await api<{ step_up_token: string }>("POST", "/api/auth/step-up/passcode", {
+    passcode: PASSCODE,
+  });
+  const adm = await api(
+    "POST",
+    "/api/admin/reset",
+    { tracking_start: "2026-11-01", confirm: "RESET" },
+    { "X-Step-Up": su2.json.step_up_token },
+  );
+  check(
+    adm.status === 200 && adm.json.ok === true && adm.json.epoch !== epoch,
+    "admin reset with step-up bumps the epoch",
+    adm.json,
+  );
+  await pullAll();
 }
 
 // ---- export, devices, logout
@@ -384,8 +513,8 @@ async function sealedPathSkipped() {
     "/api/export",
   );
   check(
-    status === 200 && (json.tables.transactions?.length ?? 0) >= 6 && json.commands.length >= 5,
-    "export has rows and the command log",
+    status === 200 && (json.tables.categories?.length ?? 0) > 10 && json.commands.length >= 10,
+    "export has rows and the command log (kept across resets)",
   );
 }
 {

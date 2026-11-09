@@ -349,7 +349,7 @@ describe("reference data commands", () => {
       default_category_id: "food",
     });
     expect(after.counterparties.some((c) => c.id === b.id)).toBe(false);
-    expect(after.transactions[0]?.counterparty_id).toBe(a.id);
+    expect(after.transactions.find((x) => x.id === t.id)?.counterparty_id).toBe(a.id);
     expect(after.recurring[0]?.counterparty_id).toBe(a.id);
     expect(execute(d2, cmd("mergeCounterparties", { into_id: a.id, from_ids: [a.id] }), ctx()).error).toBe(
       "invalid",

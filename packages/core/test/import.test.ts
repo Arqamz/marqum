@@ -118,7 +118,8 @@ describe("importStatement: replace semantics", () => {
     expect(out.result).toMatchObject({ removed: 1, unchanged: 2 });
     expect(
       apply(ds, out.mutations)
-        .transactions.map((t) => t.external_id)
+        .transactions.filter((t) => t.flow !== "carry")
+        .map((t) => t.external_id)
         .sort(),
     ).toEqual(["naya:1", "naya:3"]);
   });

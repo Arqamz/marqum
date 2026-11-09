@@ -9,10 +9,12 @@ import {
   type Recurring,
   type Rule,
   STEP_UP_ALLOWED,
+  STEP_UP_REQUIRED,
   type Statement,
   type TableName,
   type Transaction,
 } from "@marqum/schema";
+import { carryId, carryRow, OPENING_FROM_STATEMENT, OPENING_SET_BY_YOU } from "./carry.ts";
 import {
   classify,
   compileRule,
@@ -21,10 +23,16 @@ import {
   normalizeKey,
 } from "./classify.ts";
 import { closeChecklist } from "./close.ts";
-import { applyMutations, isClosed, USER_RULE_PRIORITY } from "./dataset.ts";
-import { goalSaved } from "./ledger.ts";
+import {
+  applyMutations,
+  isClosed,
+  trackingStart,
+  trackingStartMonth,
+  USER_RULE_PRIORITY,
+} from "./dataset.ts";
+import { balanceAt, goalSaved } from "./ledger.ts";
 import { matchProvisional } from "./reconcile.ts";
-import { addDays, dateOf, monthLabel, monthOf } from "./time.ts";
+import { addDays, addMonths, dateOf, dayLabel, monthLabel, monthOf, monthRange } from "./time.ts";
 import type { CommandOutcome, Dataset, ExecContext, Mutation } from "./types.ts";
 
 type Outcome = CommandOutcome;
@@ -109,7 +117,7 @@ function closedTouches(ds: Dataset, mutations: Mutation[]): ClosedTouch {
 }
 
 function guardClosed(ds: Dataset, cmd: Command, ctx: ExecContext, out: Outcome): Outcome {
-  if (!out.ok || cmd.name === "mergeCounterparties") return out;
+  if (!out.ok || cmd.name === "mergeCounterparties" || cmd.name === "resetLedger") return out;
   const touch = closedTouches(ds, out.mutations);
   if (touch.months.size === 0) return out;
   const months = [...touch.months].sort().map(monthLabel).join(", ");
@@ -146,6 +154,9 @@ function newCounterparty(
   };
 }
 
+const beforeStart = (ds: Dataset) =>
+  `that's before tracking started (${dayLabel(trackingStart(ds))} ${trackingStart(ds).slice(0, 4)})`;
+
 const findTxn = (ds: Dataset, id: string) => ds.transactions.find((t) => t.id === id && !t.deleted);
 const categoryExists = (ds: Dataset, id: string | null | undefined) =>
   id == null || ds.categories.some((c) => c.id === id && !c.deleted);
@@ -168,7 +179,13 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
 
   const mutations: Mutation[] = [];
   const now = ctx.now;
-  const accTxns = ds.transactions.filter((t) => !t.deleted && t.account_id === acc);
+  // Nothing before tracking start exists: rows dated before it are ignored, and replace semantics start there.
+  const startDT = `${trackingStart(ds)}T00:00`;
+  const rangeFrom = fromDT > startDT ? fromDT : startDT;
+  const tracked = st.rows.filter((r) => r.occurred_at >= startDT);
+  const ignored = st.rows.length - tracked.length;
+  // system rows (b/f, c/f) are never touched by an import
+  const accTxns = ds.transactions.filter((t) => !t.deleted && t.account_id === acc && t.source !== "system");
   const verifiedByExt = new Map<string, Transaction>();
   for (const t of accTxns) if (t.status === "verified" && t.external_id) verifiedByExt.set(t.external_id, t);
 
@@ -199,13 +216,15 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
   // Counterparties created during this import, by key.
   const createdCp = new Map<string, Counterparty>();
   let working = ds;
-  const resolveCounterparty = (description: string, classified: string | null): string | null => {
+  // A counterparty first seen on an internal/funding transfer is you (your own name on the other wallet or bank).
+  const resolveCounterparty = (description: string, classified: string | null, flow: Flow): string | null => {
     if (classified) return classified;
     const ex = extractCounterparty(description);
     if (!ex) return null;
     const known = createdCp.get(ex.key) ?? findCounterpartyByKey(working, ex.key);
     if (known) return known.id;
-    const cp = newCounterparty(ctx, ex.name, ex.key, ex.person ? "person" : "merchant");
+    const kind = flow === "internal" || flow === "funding" ? "self" : ex.person ? "person" : "merchant";
+    const cp = newCounterparty(ctx, ex.name, ex.key, kind);
     createdCp.set(ex.key, cp);
     mutations.push(mut("counterparties", cp));
     working = applyMutations(working, [mut("counterparties", cp)]);
@@ -220,7 +239,7 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
   let disputed = 0;
   const fresh: typeof st.rows = [];
 
-  for (const r of st.rows) {
+  for (const r of tracked) {
     const ex = verifiedByExt.get(r.external_id);
     if (!ex) {
       fresh.push(r);
@@ -287,7 +306,8 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
           reason: prov.reason ?? r.reason,
           category_id: prov.category_id ?? c.category_id,
           flow: prov.flow,
-          counterparty_id: prov.counterparty_id ?? resolveCounterparty(r.description, c.counterparty_id),
+          counterparty_id:
+            prov.counterparty_id ?? resolveCounterparty(r.description, c.counterparty_id, prov.flow),
           updated_at: now,
         }),
       );
@@ -300,7 +320,7 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
       ...bank,
       flow: c.flow,
       reason: r.reason,
-      counterparty_id: resolveCounterparty(r.description, c.counterparty_id),
+      counterparty_id: resolveCounterparty(r.description, c.counterparty_id, c.flow),
       category_id: c.category_id,
       loan_id: null,
       linked_txn_id: null,
@@ -312,16 +332,16 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
     mutations.push(mut("transactions", row));
   }
 
-  const keep = new Set(st.rows.map((r) => r.external_id));
+  const keep = new Set(tracked.map((r) => r.external_id));
   for (const t of accTxns) {
-    if (t.status !== "verified" || t.occurred_at < fromDT || t.occurred_at > toDT) continue;
+    if (t.status !== "verified" || t.occurred_at < rangeFrom || t.occurred_at > toDT) continue;
     if (t.external_id && keep.has(t.external_id)) continue;
     removed++;
     mutations.push(tombstone("transactions", t, { updated_at: now }));
   }
   for (const t of provisional) {
     if (matchedIds.has(t.id) || t.status !== "provisional") continue;
-    if (t.occurred_at < fromDT || t.occurred_at > toDT) continue;
+    if (t.occurred_at < rangeFrom || t.occurred_at > toDT) continue;
     disputed++;
     mutations.push(mut("transactions", { ...t, status: "disputed", updated_at: now }));
   }
@@ -360,7 +380,34 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
   if (st.closing !== null) entry(toDT, st.closing, "statement_close");
   for (const b of oldEntries) if (!reused.has(b.id)) mutations.push(tombstone("balances", b));
 
-  return ok(mutations, { added, updated, unchanged, removed, matched, disputed, statement_id: statementId });
+  // First tracked month's b/f = the balance at tracking start according to this statement (unless you set it).
+  const start = trackingStart(ds);
+  if (st.opening !== null && st.from <= start && st.to >= start) {
+    const before = st.rows.filter((r) => r.occurred_at < startDT).reduce((sum, r) => sum + r.amount, 0);
+    const amount = st.opening + before;
+    const id = carryId("bf", acc, start.slice(0, 7));
+    const bf = ds.transactions.find((t) => t.id === id && !t.deleted);
+    if (
+      bf?.reason !== OPENING_SET_BY_YOU &&
+      (bf?.amount !== amount || bf.reason !== OPENING_FROM_STATEMENT)
+    ) {
+      const base = bf ?? carryRow("bf", acc, start.slice(0, 7), 0, now);
+      mutations.push(
+        mut("transactions", { ...base, amount, reason: OPENING_FROM_STATEMENT, updated_at: now }),
+      );
+    }
+  }
+
+  return ok(mutations, {
+    added,
+    updated,
+    unchanged,
+    removed,
+    matched,
+    disputed,
+    ignored,
+    statement_id: statementId,
+  });
 }
 
 // ───────────────────────── transaction commands ─────────────────────────
@@ -369,6 +416,7 @@ function addProvisional(ds: Dataset, a: CommandArgs<"addProvisional">, ctx: Exec
   if (ds.transactions.some((t) => t.id === a.txn_id))
     return fail("conflict", `transaction ${a.txn_id} exists`);
   if (a.amount === 0) return fail("invalid", "amount must not be zero");
+  if (a.occurred_at < `${trackingStart(ds)}T00:00`) return fail("invalid", beforeStart(ds));
   if (!categoryExists(ds, a.category_id)) return fail("invalid", `unknown category ${a.category_id}`);
   const mutations: Mutation[] = [];
   let cp: Counterparty | null = null;
@@ -442,6 +490,8 @@ function resolveDisputed(ds: Dataset, a: CommandArgs<"resolveDisputed">, ctx: Ex
 function tagTransaction(ds: Dataset, a: CommandArgs<"tagTransaction">, ctx: ExecContext): Outcome {
   const t = findTxn(ds, a.txn_id);
   if (!t) return fail("not_found", `transaction ${a.txn_id} not found`);
+  if (t.source === "system")
+    return fail("invalid", "balance brought/carried forward entries can't be edited");
   if (a.category_id !== undefined && !categoryExists(ds, a.category_id))
     return fail("invalid", `unknown category ${a.category_id}`);
   if (a.counterparty_id != null && !ds.counterparties.some((c) => c.id === a.counterparty_id && !c.deleted))
@@ -477,7 +527,8 @@ function tagTransaction(ds: Dataset, a: CommandArgs<"tagTransaction">, ctx: Exec
   return ok(mutations);
 }
 
-function recordBalance(_ds: Dataset, a: CommandArgs<"recordBalance">): Outcome {
+function recordBalance(ds: Dataset, a: CommandArgs<"recordBalance">): Outcome {
+  if (a.as_of < `${trackingStart(ds)}T00:00`) return fail("invalid", beforeStart(ds));
   const row: BalanceEntry = {
     id: a.entry_id,
     account_id: a.account_id,
@@ -493,6 +544,8 @@ function recordBalance(_ds: Dataset, a: CommandArgs<"recordBalance">): Outcome {
 // ───────────────────────── reference data ─────────────────────────
 
 function upsertCategory(ds: Dataset, a: CommandArgs<"upsertCategory">): Outcome {
+  if (a.budget != null && a.budget < 0) return fail("invalid", "budget must not be negative");
+  const existing = ds.categories.find((c) => c.id === a.category_id);
   if (a.parent_id !== null) {
     if (a.parent_id === a.category_id) return fail("invalid", "a category can't be its own parent");
     const parent = ds.categories.find((c) => c.id === a.parent_id && !c.deleted);
@@ -511,6 +564,7 @@ function upsertCategory(ds: Dataset, a: CommandArgs<"upsertCategory">): Outcome 
       nature: a.nature,
       sort: a.sort,
       hidden: a.hidden,
+      budget: a.budget !== undefined ? a.budget : (existing?.budget ?? null),
       ...SYNC,
     }),
   ]);
@@ -685,6 +739,17 @@ function setSettingCmd(_ds: Dataset, a: CommandArgs<"setSetting">): Outcome {
     !(/^\d+$/.test(a.value) && Number(a.value) >= 1 && Number(a.value) <= 28)
   )
     return fail("invalid", "close_reminder_day must be 1–28");
+  if (a.key === "tracking_start") return fail("invalid", "change tracking start with resetLedger");
+  if (a.key === "allocation_sadapay" && a.value !== "" && !/^\d+$/.test(a.value))
+    return fail("invalid", "allocation_sadapay must be empty or a non-negative integer (paisa)");
+  if (a.key === "forecast" && a.value !== "") {
+    try {
+      const v: unknown = JSON.parse(a.value);
+      if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("not an object");
+    } catch {
+      return fail("invalid", "forecast must be empty or a JSON object");
+    }
+  }
   return ok([mut("settings", { id: a.key, value: a.value, ...SYNC })]);
 }
 
@@ -695,7 +760,17 @@ function closeMonth(ds: Dataset, a: CommandArgs<"closeMonth">, ctx: ExecContext)
     const blocking = check.items.filter((i) => i.severity === "block" && !i.ok).map((i) => i.label);
     return fail("invalid", `Can't close ${monthLabel(a.month)}: ${blocking.join("; ")}`);
   }
+  // c/f on the last day 23:59 = −closing; b/f of the next month on the 1st 00:00 = +closing.
+  const end = `${monthRange(a.month).to}T23:59`;
+  const next = addMonths(a.month, 1);
+  const carries: Mutation[] = [];
+  for (const acc of accountIds(ds)) {
+    const closing = balanceAt(ds, acc, end);
+    carries.push(mut("transactions", carryRow("cf", acc, a.month, -closing, ctx.now)));
+    carries.push(mut("transactions", carryRow("bf", acc, next, closing, ctx.now)));
+  }
   return ok([
+    ...carries,
     mut("months", {
       id: a.month,
       status: "closed",
@@ -711,7 +786,87 @@ function reopenMonth(ds: Dataset, a: CommandArgs<"reopenMonth">, ctx: ExecContex
   if (!ctx.steppedUp) return fail("step_up_required", "reopening a month needs fingerprint or passkey");
   const rec = ds.months.find((m) => m.id === a.month && !m.deleted);
   if (rec?.status !== "closed") return fail("invalid", `${monthLabel(a.month)} is not closed`);
-  return ok([mut("months", { ...rec, status: "open", closed_at: null })]);
+  const next = addMonths(a.month, 1);
+  if (isClosed(ds, next)) return fail("invalid", `Reopen ${monthLabel(next)} first`);
+  const mutations: Mutation[] = [];
+  for (const acc of accountIds(ds)) {
+    for (const id of [carryId("cf", acc, a.month), carryId("bf", acc, next)]) {
+      const row = ds.transactions.find((t) => t.id === id && !t.deleted);
+      if (row) mutations.push(tombstone("transactions", row, { updated_at: ctx.now }));
+    }
+  }
+  mutations.push(mut("months", { ...rec, status: "open", closed_at: null }));
+  return ok(mutations);
+}
+
+const LEDGER_TABLES = [
+  "transactions",
+  "statements",
+  "balances",
+  "months",
+  "notifications",
+  "goal_moves",
+] as const;
+
+function resetLedger(ds: Dataset, a: CommandArgs<"resetLedger">, ctx: ExecContext): Outcome {
+  if (!/^\d{4}-\d{2}-01$/.test(a.tracking_start))
+    return fail("invalid", "tracking start must be the first day of a month");
+  const mutations: Mutation[] = [];
+  for (const table of LEDGER_TABLES)
+    for (const row of ds[table] as { id: string; deleted: boolean }[])
+      if (!row.deleted)
+        mutations.push(tombstone(table, row, table === "transactions" ? { updated_at: ctx.now } : {}));
+  mutations.push(mut("settings", { id: "tracking_start", value: a.tracking_start, ...SYNC }));
+  // b/f rows for the new start month are added by ensureOpening (execute)
+  return ok(mutations, { tracking_start: a.tracking_start });
+}
+
+function setOpeningBalance(ds: Dataset, a: CommandArgs<"setOpeningBalance">, ctx: ExecContext): Outcome {
+  const month = trackingStartMonth(ds);
+  if (isClosed(ds, month)) return fail("closed_month", `${monthLabel(month)} is closed`);
+  const id = carryId("bf", a.account_id, month);
+  const base =
+    ds.transactions.find((t) => t.id === id && !t.deleted) ?? carryRow("bf", a.account_id, month, 0, ctx.now);
+  return ok([
+    mut("transactions", { ...base, amount: a.amount, reason: OPENING_SET_BY_YOU, updated_at: ctx.now }),
+  ]);
+}
+
+const accountIds = (ds: Dataset): AccountId[] =>
+  ds.accounts.length ? ds.accounts.filter((x) => !x.deleted).map((x) => x.id) : ["sadapay", "nayapay"];
+
+/**
+ * The first tracked month always opens with a b/f row per wallet: the statement opening if a statement starts
+ * on tracking start, else 0. Added to any command's outcome when missing.
+ */
+function ensureOpening(ds: Dataset, ctx: ExecContext): Mutation[] {
+  if (ds.accounts.length === 0) return [];
+  const start = trackingStart(ds);
+  const month = start.slice(0, 7);
+  const out: Mutation[] = [];
+  for (const acc of accountIds(ds)) {
+    const id = carryId("bf", acc, month);
+    if (ds.transactions.some((t) => t.id === id && !t.deleted)) continue;
+    const st = ds.statements.find(
+      (x) => !x.deleted && x.account_id === acc && x.period_from === start && x.opening !== null,
+    );
+    out.push(
+      mut(
+        "transactions",
+        carryRow("bf", acc, month, st?.opening ?? 0, ctx.now, st ? OPENING_FROM_STATEMENT : null),
+      ),
+    );
+  }
+  return out;
+}
+
+/** Keep only the last write per row, at the position of that last write. */
+function dedupe(mutations: Mutation[]): Mutation[] {
+  const last = new Map<string, number>();
+  mutations.forEach((m, i) => {
+    last.set(`${m.table}|${m.row.id}`, i);
+  });
+  return mutations.filter((m, i) => last.get(`${m.table}|${m.row.id}`) === i);
 }
 
 // ───────────────────────── entry point ─────────────────────────
@@ -758,6 +913,10 @@ function run(ds: Dataset, c: Command, ctx: ExecContext): Outcome {
       return closeMonth(ds, c.args, ctx);
     case "reopenMonth":
       return reopenMonth(ds, c.args, ctx);
+    case "resetLedger":
+      return resetLedger(ds, c.args, ctx);
+    case "setOpeningBalance":
+      return setOpeningBalance(ds, c.args, ctx);
   }
 }
 
@@ -775,5 +934,10 @@ export function execute(ds: Dataset, command: Command, ctx: ExecContext): Comman
     );
   }
   const cmd = parsed.data;
-  return guardClosed(ds, cmd, ctx, run(ds, cmd, ctx));
+  if (STEP_UP_REQUIRED.includes(cmd.name) && !ctx.steppedUp)
+    return fail("step_up_required", "confirm with fingerprint or passkey");
+  const out = guardClosed(ds, cmd, ctx, run(ds, cmd, ctx));
+  if (!out.ok) return out;
+  const extra = ensureOpening(applyMutations(ds, out.mutations), ctx);
+  return { ...out, mutations: dedupe([...out.mutations, ...extra]) };
 }

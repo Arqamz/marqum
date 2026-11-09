@@ -13,6 +13,7 @@ import type {
   Statement,
   Transaction,
 } from "@marqum/schema";
+import { carryRow } from "../src/carry.ts";
 import { applyMutations, emptyDataset, seedMutations } from "../src/dataset.ts";
 import type { Dataset, ExecContext, Mutation } from "../src/types.ts";
 
@@ -21,8 +22,21 @@ export const nextId = (prefix = "t"): string => `${prefix}${String(++seq).padSta
 
 export const NOW = "2026-11-15T12:00";
 
-export function seeded(): Dataset {
-  return applyMutations(emptyDataset(), seedMutations(NOW));
+/**
+ * Seeded dataset tracking from `start` (default Jan 2026 so historic fixtures count), with the first month's
+ * b/f rows at 0 (unknown opening).
+ */
+export function seeded(start = "2026-01-01"): Dataset {
+  const seed = seedMutations(NOW).filter((m) => !(m.table === "transactions"));
+  const ds = applyMutations(emptyDataset(), [
+    ...seed,
+    { table: "settings", row: { id: "tracking_start", value: start, version: 1, deleted: false } },
+    ...(["sadapay", "nayapay"] as const).map((a) => ({
+      table: "transactions" as const,
+      row: carryRow("bf", a, start.slice(0, 7), 0, NOW),
+    })),
+  ]);
+  return ds;
 }
 
 export function ctx(now = NOW, steppedUp = false): ExecContext {
@@ -252,3 +266,15 @@ export const apply = (ds: Dataset, mutations: Mutation[]) => applyMutations(ds, 
 
 export const rowsOf = (mutations: Mutation[], table: string) =>
   mutations.filter((m) => m.table === table).map((m) => m.row);
+
+/** Set the first tracked month's b/f (opening balance) per wallet. */
+export function withOpening(ds: Dataset, opening: Partial<Record<AccountId, number>>): Dataset {
+  return {
+    ...ds,
+    transactions: ds.transactions.map((t) =>
+      t.flow === "carry" && t.external_id?.startsWith("carry:bf:") && opening[t.account_id] !== undefined
+        ? { ...t, amount: opening[t.account_id] as number, reason: "Opening balance set by you" }
+        : t,
+    ),
+  };
+}

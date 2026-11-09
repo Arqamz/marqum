@@ -8,11 +8,12 @@ import {
   karachiNow,
   type Mutation,
 } from "@marqum/core";
-import type { Command } from "@marqum/schema";
+import { type Command, STEP_UP_REQUIRED } from "@marqum/schema";
 import { ulid } from "ulidx";
 import type { Env } from "../env.ts";
+import { exportAll } from "./backup.ts";
 import { isoNow } from "./http.ts";
-import { writeMutations } from "./store.ts";
+import { purgeLedgerTombstones, writeMutations } from "./store.ts";
 
 export interface CommandResult {
   id: string;
@@ -97,14 +98,18 @@ export async function runCommand(
   if (prior) return { result: prior, ds, version: null };
 
   let outcome: CommandOutcome;
-  try {
-    outcome = execute(ds, cmd, {
-      now: opts.now ?? karachiNow(),
-      steppedUp: opts.steppedUp,
-      newId: () => ulid(),
-    });
-  } catch (e) {
-    outcome = { ok: false, mutations: [], error: "invalid", message: (e as Error).message };
+  if (STEP_UP_REQUIRED.includes(cmd.name) && !opts.steppedUp) {
+    outcome = { ok: false, mutations: [], error: "step_up_required", message: "Confirm it's you first." };
+  } else {
+    try {
+      outcome = execute(ds, cmd, {
+        now: opts.now ?? karachiNow(),
+        steppedUp: opts.steppedUp,
+        newId: () => ulid(),
+      });
+    } catch (e) {
+      outcome = { ok: false, mutations: [], error: "invalid", message: (e as Error).message };
+    }
   }
   if (!outcome.ok) {
     const result = toResult(cmd.id, outcome);
@@ -127,10 +132,22 @@ export async function runCommand(
       return { result, ds, version: null };
     }
   }
-  const result = toResult(cmd.id, outcome);
+  let result = toResult(cmd.id, outcome);
+  if (cmd.name === "resetLedger") {
+    // keep a full copy of what is about to be wiped (resets/ is outside the bucket-lock rules)
+    const key = `resets/${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    await env.BACKUPS.put(key, JSON.stringify(await exportAll(env.DB)), {
+      httpMetadata: { contentType: "application/json" },
+    });
+    result = { ...result, result: { ...result.result, backup_key: key } };
+  }
   const { version, written } = await writeMutations(env.DB, mutations, [
     logStatement(env.DB, cmd, opts.deviceId, result),
   ]);
+  if (cmd.name === "resetLedger") {
+    const epoch = await purgeLedgerTombstones(env.DB);
+    result = { ...result, result: { ...result.result, epoch } };
+  }
   return { result, ds: applyMutations(ds, written), version };
 }
 

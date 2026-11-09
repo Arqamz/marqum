@@ -1,23 +1,43 @@
 import type { AccountId, Category, Transaction } from "@marqum/schema";
+import { isBf, isCarry, isCf } from "./carry.ts";
 import { counterpartyKey, normalizeKey } from "./classify.ts";
+import { isClosed, trackingStartMonth } from "./dataset.ts";
 import {
+  balanceAt,
   categoryAverage,
   categoryMonthlySpend,
   firstDataMonth,
   liveTxns,
   loanStatuses,
   median,
+  monthlySpendOf,
+  spendEvents,
+  subtreeIds,
   walletPositions,
 } from "./ledger.ts";
-import { daysBetween, daysInMonth, monthOf, monthsBetween, weekdayIndex } from "./time.ts";
+import {
+  addDays,
+  addMonths,
+  daysBetween,
+  daysInMonth,
+  monthOf,
+  monthRange,
+  monthsBetween,
+  weekdayIndex,
+} from "./time.ts";
 import type {
+  BreakdownPart,
+  CategoryBreakdown,
   CategoryCard,
+  CategoryMonthDetail,
   CounterpartyStats,
   Dataset,
+  MonthLedger,
   NetPosition,
   RecurringCandidate,
   SeriesPoint,
   UnverifiedSummary,
+  WalletMonthDetail,
 } from "./types.ts";
 
 export { spendOf } from "./ledger.ts";
@@ -71,6 +91,7 @@ const isVisible = (c: Category, spent: number, average: number | null) =>
   !c.hidden || spent > 0 || (average !== null && average > 0);
 
 export function categoryCards(ds: Dataset, month: string, now: string): CategoryCard[] {
+  if (month < trackingStartMonth(ds)) return [];
   const current = monthOf(now);
   const dayFrac = month === current ? Number(now.slice(8, 10)) / daysInMonth(month) : month < current ? 1 : 0;
   const cats = ds.categories.filter((c) => !c.deleted);
@@ -80,15 +101,11 @@ export function categoryCards(ds: Dataset, month: string, now: string): Category
     const spent = monthly.get(month) ?? 0;
     const { average, months_in_average } = categoryAverage(ds, cat.id, month, monthly);
     if (!isVisible(cat, spent, average)) continue;
-    const children = cats
-      .filter((c) => c.parent_id === cat.id)
-      .sort((a, b) => a.sort - b.sort)
-      .map((child) => {
-        const cm = categoryMonthlySpend(ds, child.id);
-        const cs = cm.get(month) ?? 0;
-        return { category: child, spent: cs, average: categoryAverage(ds, child.id, month, cm).average };
-      })
-      .filter((c) => isVisible(c.category, c.spent, c.average));
+    const children = breakdownParts(ds, cat, month, spent).map((p) => ({
+      category: p.category,
+      spent: p.spent,
+      average: p.average,
+    }));
     cards.push({
       category: cat,
       spent,
@@ -272,4 +289,192 @@ export function unverifiedSummary(ds: Dataset): UnverifiedSummary {
     if (b.since === null || t.occurred_at < b.since) b.since = t.occurred_at;
   }
   return { count: rows.length, total, since, disputed, by_account };
+}
+
+// ───────────────────────── months & ledgers ─────────────────────────
+
+/** Months from tracking start to the current month, oldest first. */
+export function trackedMonths(ds: Dataset, now: string): string[] {
+  return monthsBetween(trackingStartMonth(ds), monthOf(now));
+}
+
+/** Months the UI can browse (= trackedMonths). */
+export const availableMonths = trackedMonths;
+
+/** Tracked months that have ended and aren't closed yet, oldest first. Never anything before tracking start. */
+export function monthsToClose(ds: Dataset, now: string): string[] {
+  return trackedMonths(ds, now).filter((m) => m < monthOf(now) && !isClosed(ds, m));
+}
+
+/**
+ * One wallet's month as an account: b/f → in → out → closing (→ c/f when closed). For an open month without a
+ * b/f row, b/f is virtual: the previous month's computed closing.
+ */
+export function monthLedger(ds: Dataset, accountId: AccountId, month: string, _now: string): MonthLedger {
+  const txns = liveTxns(ds)
+    .filter((t) => t.account_id === accountId && monthOf(t.occurred_at) === month)
+    .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at) || a.id.localeCompare(b.id));
+  const bf = txns.find(isBf);
+  const cf = txns.find(isCf);
+  const body = txns.filter((t) => !isCarry(t));
+  let brought_forward: number;
+  let brought_forward_virtual = false;
+  if (bf) brought_forward = bf.amount;
+  else {
+    brought_forward_virtual = true;
+    brought_forward =
+      month <= trackingStartMonth(ds)
+        ? 0
+        : balanceAt(ds, accountId, `${monthRange(addMonths(month, -1)).to}T23:59`);
+  }
+  let inflow = 0;
+  let outflow = 0;
+  for (const t of body) {
+    if (t.amount > 0) inflow += t.amount;
+    else outflow -= t.amount;
+  }
+  return {
+    month,
+    brought_forward,
+    brought_forward_virtual,
+    inflow,
+    outflow,
+    closing: brought_forward + inflow - outflow,
+    carried_forward: cf ? cf.amount : null,
+    transactions: body,
+  };
+}
+
+/** monthLedger + per-day net flow and closing balance for every day of the month. */
+export function walletMonthDetail(
+  ds: Dataset,
+  accountId: AccountId,
+  month: string,
+  now: string,
+): WalletMonthDetail {
+  const ledger = monthLedger(ds, accountId, month, now);
+  const { from } = monthRange(month);
+  const byDay = new Map<string, number>();
+  for (const t of ledger.transactions)
+    byDay.set(t.occurred_at.slice(0, 10), (byDay.get(t.occurred_at.slice(0, 10)) ?? 0) + t.amount);
+  const daily: WalletMonthDetail["daily"] = [];
+  let running = ledger.brought_forward;
+  for (let i = 0; i < daysInMonth(month); i++) {
+    const date = addDays(from, i);
+    const net = byDay.get(date) ?? 0;
+    running += net;
+    daily.push({ date, net, closing: running });
+  }
+  return { ...ledger, account_id: accountId, daily };
+}
+
+// ───────────────────────── category breakdowns ─────────────────────────
+
+const otherId = (parentId: string) => `${parentId}.__other`;
+
+/** Children of a category plus an "Other <Parent>" bucket for spend tagged directly with the parent. */
+function breakdownParts(
+  ds: Dataset,
+  cat: Category,
+  month: string,
+  total: number,
+): (BreakdownPart & { category: Category })[] {
+  const parts: (BreakdownPart & { category: Category })[] = [];
+  const share = (v: number) => (total > 0 ? v / total : 0);
+  for (const child of ds.categories.filter((c) => !c.deleted && c.parent_id === cat.id)) {
+    const cm = categoryMonthlySpend(ds, child.id);
+    const spent = cm.get(month) ?? 0;
+    const average = categoryAverage(ds, child.id, month, cm).average;
+    if (!isVisible(child, spent, average)) continue;
+    parts.push({ id: child.id, name: child.name, spent, average, share: share(spent), category: child });
+  }
+  const direct = monthlySpendOf(ds, new Set([cat.id]));
+  const otherSpent = direct.get(month) ?? 0;
+  const hasChildren = ds.categories.some((c) => !c.deleted && c.parent_id === cat.id);
+  if (otherSpent > 0 && hasChildren) {
+    const id = otherId(cat.id);
+    const category: Category = {
+      ...cat,
+      id,
+      parent_id: cat.id,
+      name: `Other ${cat.name}`,
+      hidden: false,
+      budget: null,
+    };
+    parts.push({
+      id,
+      name: category.name,
+      spent: otherSpent,
+      average: categoryAverage(ds, cat.id, month, direct).average,
+      share: share(otherSpent),
+      category,
+    });
+  }
+  return parts.sort(
+    (a, b) => b.spent - a.spent || a.category.sort - b.category.sort || a.id.localeCompare(b.id),
+  );
+}
+
+function findCategory(ds: Dataset, categoryId: string): Category {
+  const cat = ds.categories.find((c) => c.id === categoryId && !c.deleted);
+  if (!cat) throw new Error(`category not found: ${categoryId}`);
+  return cat;
+}
+
+const stripCategory = (p: BreakdownPart & { category: Category }): BreakdownPart => ({
+  id: p.id,
+  name: p.name,
+  spent: p.spent,
+  average: p.average,
+  share: p.share,
+});
+
+/**
+ * A category's month split into its subcategories plus "Other <Parent>" (spend tagged directly with the parent,
+ * only when non-zero and the category has subcategories), sorted by spend.
+ */
+export function categoryBreakdown(
+  ds: Dataset,
+  categoryId: string,
+  month: string,
+  _now: string,
+): CategoryBreakdown {
+  const category = findCategory(ds, categoryId);
+  const monthly = categoryMonthlySpend(ds, categoryId);
+  const total = monthly.get(month) ?? 0;
+  return {
+    category,
+    total,
+    average: categoryAverage(ds, categoryId, month, monthly).average,
+    budget: category.budget ?? null,
+    parts: breakdownParts(ds, category, month, total).map(stripCategory),
+  };
+}
+
+/** Screen-Time style month view: daily spend, change vs previous month, and the breakdown. */
+export function categoryMonthDetail(
+  ds: Dataset,
+  categoryId: string,
+  month: string,
+  now: string,
+): CategoryMonthDetail {
+  const b = categoryBreakdown(ds, categoryId, month, now);
+  const byDay = new Map<string, number>();
+  for (const e of spendEvents(ds, subtreeIds(ds, categoryId)))
+    if (monthOf(e.at) === month) byDay.set(e.at.slice(0, 10), (byDay.get(e.at.slice(0, 10)) ?? 0) + e.value);
+  const { from } = monthRange(month);
+  const daily = Array.from({ length: daysInMonth(month) }, (_, i) => {
+    const date = addDays(from, i);
+    return { date, value: byDay.get(date) ?? 0 };
+  });
+  const prev = categoryMonthlySpend(ds, categoryId).get(addMonths(month, -1)) ?? 0;
+  return {
+    month,
+    total: b.total,
+    average: b.average,
+    daily,
+    prev_month_total: prev,
+    change_pct: prev > 0 ? Math.round(((b.total - prev) / prev) * 1000) / 10 : null,
+    parts: b.parts,
+  };
 }

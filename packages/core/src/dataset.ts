@@ -1,4 +1,5 @@
 import { SEED_ACCOUNTS, SEED_CATEGORIES, SEED_RULES, SETTINGS, type TableName } from "@marqum/schema";
+import { carryRow } from "./carry.ts";
 import type { Dataset, Mutation } from "./types.ts";
 
 const TABLE_KEYS: TableName[] = [
@@ -89,11 +90,25 @@ export function numericSetting(ds: Dataset, key: string): number {
   return Number((SETTINGS as Record<string, string>)[key] ?? 0);
 }
 
+const DATE = /^\d{4}-\d{2}-01$/;
+
+/** First tracked day (`YYYY-MM-01`). Nothing before it exists for analytics, balances or closing. */
+export function trackingStart(ds: Dataset): string {
+  const v = setting(ds, "tracking_start");
+  return DATE.test(v) ? v : ((SETTINGS as Record<string, string>).tracking_start ?? "2026-11-01");
+}
+
+/** First tracked month, `YYYY-MM`. */
+export const trackingStartMonth = (ds: Dataset): string => trackingStart(ds).slice(0, 7);
+
+/** true for datetimes/dates on or after tracking start */
+export const isTracked = (ds: Dataset, dt: string): boolean => dt.slice(0, 10) >= trackingStart(ds);
+
 /** Priority of the lowest seed rule is 1, highest is SEED_RULES.length; user rules start at USER_RULE_PRIORITY. */
 export const USER_RULE_PRIORITY = 1000;
 
 /** Rows for a fresh database. Ids are deterministic so two devices seeding offline converge. */
-export function seedMutations(_now: string): Mutation[] {
+export function seedMutations(now: string): Mutation[] {
   const base = { version: 0, deleted: false };
   const out: Mutation[] = [];
   for (const a of SEED_ACCOUNTS) out.push({ table: "accounts", row: { ...a, ...base } });
@@ -109,6 +124,7 @@ export function seedMutations(_now: string): Mutation[] {
         nature: c.nature,
         sort: i,
         hidden: c.hidden ?? false,
+        budget: null,
         ...base,
       },
     });
@@ -129,5 +145,9 @@ export function seedMutations(_now: string): Mutation[] {
   });
   for (const [id, value] of Object.entries(SETTINGS))
     out.push({ table: "settings", row: { id, value, ...base } });
+  // opening balance (b/f) of the first tracked month: 0 until a statement or setOpeningBalance says otherwise
+  const start = (SETTINGS as Record<string, string>).tracking_start ?? "2026-11-01";
+  for (const a of SEED_ACCOUNTS)
+    out.push({ table: "transactions", row: { ...carryRow("bf", a.id, start.slice(0, 7), 0, now) } });
   return out;
 }

@@ -7,9 +7,13 @@ Conventions:
 
 - Money is integer **paisa** (Rs 1 = 100). Negative = money left the wallet. Examples below are in rupees.
 - Times are Asia/Karachi local strings. "This month" is the month of `now`.
-- Only `spend` and `fee` flows count as spending. `funding`, `internal`, `income`, `loan_in`, `loan_repay` and
-  `reimbursement` never do.
+- Only `spend` and `fee` flows count as spending. `funding`, `internal`, `income`, `loan_in`, `loan_repay`,
+  `reimbursement` and `carry` never do.
 - Deleted (tombstoned) rows are ignored everywhere.
+- **Tracking start** (setting `tracking_start`, default 1 Nov 2026, always the 1st of a month): nothing dated before
+  it exists. Analytics, balances, averages, month lists and the close checklist all ignore it. `trackedMonths` /
+  `availableMonths` run from the tracking-start month to this month; `monthsToClose` lists the ended, unclosed
+  ones among them.
 
 ## Classification
 
@@ -49,7 +53,9 @@ punctuation, bank and city words removed (at most four words):
 | `Card payment 0000 KFC GULBERG`            | `KFC GULBERG`  | merchant |
 | `Service charges`                          | none           |          |
 
-A statement import creates a counterparty for each new key.
+A statement import creates a counterparty for each new key. If that row is an internal transfer or funding, the
+new counterparty is `self` (it is your own name on the other wallet or bank), so later transfers to it stay
+internal.
 
 ## Reconciliation
 
@@ -66,29 +72,70 @@ description words, then by id (so the result is deterministic).
 3. Other new rows are inserted as `verified` and classified.
 4. Verified rows of W inside the period that are not on the statement are deleted.
 5. Unmatched provisional rows of W inside the period become `disputed`.
-6. The statement's opening becomes a balance anchor at the day before `from`, 23:59; its closing becomes an
-   anchor at `to` 23:59. Re-importing the same period replaces that statement's anchors. An anchor identical to an
+6. The statement's opening is stored as a balance **assertion** at the day before `from`, 23:59, and its closing
+   at `to` 23:59. Re-importing the same period replaces that statement's assertions. An assertion identical to an
    existing one (same wallet, time, kind and balance) is not duplicated.
+7. Rows dated before tracking start are ignored, and the replace range starts at tracking start.
+8. System rows (b/f, c/f) are never deleted or changed by an import.
+9. If the statement spans tracking start and has an opening, the first month's b/f becomes opening + Σ statement
+   rows before tracking start, unless you set it with `setOpeningBalance`.
 
 Re-importing an identical statement writes nothing. The result reports
-`{ added, updated, unchanged, removed, matched, disputed }`.
+`{ added, updated, unchanged, removed, matched, disputed, ignored }`.
 
-## Wallet balance
+## Accounting model (b/f → c/f)
 
-For each wallet:
+Balances are **derived from the ledger**. A balance entry, whether a statement opening or closing or a balance you
+typed, is an **assertion**: it is checked against the ledger, but it never sets the balance.
 
-- **Anchor** = the latest balance entry by `as_of`. Statement closings, statement openings and manual entries
-  are all anchors. On a tie, a statement closing beats an opening, which beats a manual entry.
-- **balance** = anchor + Σ amounts of transactions strictly after the anchor's `as_of`. Provisional and disputed
-  rows are included.
-- **provisional_delta** = Σ of the provisional/disputed amounts included above.
+- **balance(wallet, at)** = Σ amounts of tracked transactions of that wallet with occurred_at ≤ at. A c/f row
+  dated exactly at `at` is left out, so the balance at a month's last 23:59 is that month's closing.
+- Every month of every wallet is an account that runs from 0 to 0 through two system rows (flow `carry`, source
+  `system`, status `verified`, no category, deterministic id = external_id):
+  - **b/f** `carry:bf:<wallet>:<YYYY-MM>` on the 1st at 00:00: "Balance brought forward from Oct 2026", +opening;
+  - **c/f** `carry:cf:<wallet>:<YYYY-MM>` on the last day at 23:59: "Balance carried forward to Dec 2026", −closing.
+- **First tracked month.** Its b/f always exists for both wallets; any command adds it if it is missing. Its
+  amount comes from:
+  - the opening of a statement that spans tracking start (+ its rows before tracking start);
+  - else 0, recorded as "unknown";
+  - `setOpeningBalance` overrides it ("Opening balance set by you"), and later imports don't change it.
+
+  It can't be changed once that month is closed.
+- **closeMonth(M)** writes c/f(M) = −closing(M) and b/f(M+1) = +closing(M) for each wallet. They are part of M's
+  sealed snapshot. **reopenMonth(M)** deletes both, and is refused while M+1 is closed.
+- An **open** month has no b/f row, unless it is the first month. Views then show a **virtual b/f** = the previous
+  month's computed closing.
+- `monthLedger(ds, wallet, M)` = { brought_forward, brought_forward_virtual, inflow, outflow (positive), closing =
+  b/f + in − out, carried_forward (the c/f amount as booked, or null), transactions (non-carry) }.
+  `walletMonthDetail` adds each day's net flow and 23:59 closing.
+- Because c/f(M) and b/f(M+1) cancel, the running balance is unchanged by closing a month.
+
+**Worked example, Nov → Dec 2026** (tracking starts 1 Nov):
+
+| NayaPay                                         | Amount | Running |
+| ----------------------------------------------- | ------ | ------- |
+| 1 Nov 00:00 b/f (statement opening)             | +5,000 | 5,000   |
+| 3 Nov Shell                                     | −3,000 | 2,000   |
+| 4 Nov transfer from SadaPay                     | +1,000 | 3,000   |
+| **Closing 30 Nov** (= statement closing ✓)      |        | 3,000   |
+| 30 Nov 23:59 c/f "carried forward to Dec 2026"  | −3,000 | 0       |
+| 1 Dec 00:00 b/f "brought forward from Nov 2026" | +3,000 | 3,000   |
+
+SadaPay has no statement balances. You set its opening to Rs 2,000; it then pays −1,000 to NayaPay and −900 to
+iCloud, so its closing is Rs 100, booked as c/f −100 and b/f(Dec) +100. Before November is closed, December shows
+a virtual b/f of 3,000 (NayaPay) and 100 (SadaPay).
+
+## Wallet position
+
+- **balance** = the ledger balance now (all tracked transactions, provisional and disputed included; carries
+  cancel).
+- **provisional_delta** = Σ provisional/disputed amounts.
 - **verified_until** = the latest `period_to` among the wallet's statements.
-- **unaccounted** applies only when the latest anchor is a manual entry E. It equals E − (previous anchor + Σ
-  transactions after that anchor up to E). It is 0 when there is no earlier anchor.
+- **unaccounted** = the latest manual balance (on or after tracking start) − the ledger balance at that moment.
 
-Example (NayaPay): the statement closes 7 Nov at Rs 1,000. On 8 Nov there's a verified −Rs 200. On 9 Nov you
-type a balance of Rs 700, so the computed balance at that moment is 1,000 − 200 = 800 and **unaccounted = −Rs
-100**. Then a provisional −Rs 50 is added on 10 Nov: balance = 700 − 50 = **Rs 650**, provisional_delta = −Rs 50.
+Example (NayaPay, b/f Rs 5,000): −Rs 200 on 8 Nov. On 9 Nov you type Rs 4,700, but the ledger says 4,800, so
+**unaccounted = −Rs 100**. A provisional −Rs 50 follows on 10 Nov: balance **Rs 4,750**, provisional_delta −Rs 50. A
+statement closing assertion doesn't change any of this; the close checklist compares it.
 
 **SadaPay floor** = Σ goal envelopes (Σ goal moves per goal, each floored at 0) + Σ active recurring payments on
 SadaPay (next month's bills). **Free savings** = SadaPay balance − floor (can be negative).
@@ -118,8 +165,8 @@ C, − Σ reimbursements in M whose `linked_txn_id` points to an expense in C's 
 spendOf(t) = −amount for `spend`/`fee` outflows, else 0. A reimbursement offsets the category in the month the
 money comes back, not the month of the expense.
 
-**Average.** Take the `avg_window` (6, or 3) complete months before M, and drop any that are earlier than the
-first month with any transaction at all. That count is `months_in_average`. The average is the Σ spend over those
+**Average.** Take the `avg_window` (6, or 3) complete months before M, and drop any that are before tracking start
+or earlier than the first month with any (non-carry) transaction. That count is `months_in_average`. The average is the Σ spend over those
 months divided by that count (a month with data but no spend in C counts as 0), or `null` when the count is 0.
 
 - `over_average` = spent > average. This colours the home card: red if over, green otherwise.
@@ -133,6 +180,16 @@ Example (Food): May–Jul Rs 100/month, Aug–Oct Rs 400/month, 15 Nov so far Rs
   2 months.
 
 A hidden (suggested) category shows on the home screen once it has spend this month or a non-zero average.
+
+**Breakdown.** `categoryBreakdown(C, M)` splits C's total into each visible subcategory plus **"Other C"** (id
+`C.__other`). "Other C" is the spend tagged directly with C itself, and appears only when non-zero and C has
+subcategories. Parts are sorted by spend, and share = part / total. The home card's `children` carry the same
+parts.
+
+Example: Car = Petrol 6,500 + Car wash 1,000 + 2,500 tagged "Car" → Petrol 65%, Other Car 25%, Car wash 10%.
+
+`categoryMonthDetail` adds every day's spend, last month's total and change % ((total − prev) / prev, one
+decimal; null when prev is 0).
 
 ## Outliers
 
@@ -169,73 +226,133 @@ candidate: Rs 900 on day 3, 4 occurrences.
 
 ## Budget model
 
-| Quantity             | Definition                                                                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| income I             | setting `income_monthly` (default Rs 85,000)                                                                                                                              |
-| committed C          | Σ active recurring + Σ installments of open loans (capped at what's left) + averages of top-level **fixed** categories that have no active recurring row in their subtree |
-| variable V           | Σ averages of top-level **variable** categories (hidden ones included)                                                                                                    |
-| goal contributions G | Σ `monthly` of goals not achieved and not yet fully saved                                                                                                                 |
-| surplus S            | I − C − V − G                                                                                                                                                             |
-| floor                | as above                                                                                                                                                                  |
-| free savings F       | SadaPay balance − floor                                                                                                                                                   |
+**Planned spend** per top-level category = `budget` ?? average ?? 0, and the source is reported (`budget`,
+`average` or `none`). A fixed category covered by an active fixed charge (Recurring row) in its subtree is
+reported as `recurring` and not counted again.
 
-A fixed category that has a recurring row is left out of the average, because the recurring row already counts
-it.
+| Quantity             | Definition                                                                                                                               |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| income I             | setting `income_monthly` (default Rs 85,000)                                                                                             |
+| committed C          | Σ active fixed charges + Σ installments of open loans (capped at what's left) + planned spend of fixed categories without a fixed charge |
+| variable V           | Σ planned spend of top-level **variable** categories (hidden ones included)                                                              |
+| goal contributions G | Σ `monthly` of goals not achieved and not yet fully saved                                                                                |
+| surplus S            | I − C − V − G                                                                                                                            |
+| floor                | as above                                                                                                                                 |
+| free savings F       | SadaPay balance − floor                                                                                                                  |
 
-**Levers** `{category_id, pct}` change the average before anything else: avg(top) + avg(target) × pct/100 for each
-lever whose target is the top-level category or one of its subcategories.
+**Levers** `{category_id, pct}` adjust planned spend before anything else: plan(top) + plan(target) × pct/100 for
+each lever whose target is the top-level category or one of its subcategories.
 
 Worked example (used throughout the tests). Aug–Oct history: Food Rs 30,000/mo, Car › Petrol Rs 10,000/mo,
-Bills › Electricity Rs 4,000/mo, Subscriptions › VPS Rs 2,000/mo. A Guard recurring row (Rs 5,000, Bills) sits on
-SadaPay. Loan installment Rs 9,000. Goal Bicycle: Rs 10,000/mo, Rs 10,000 of Rs 50,000 saved. SadaPay balance
-Rs 25,000.
+Bills › Electricity Rs 4,000/mo, Subscriptions › VPS Rs 2,000/mo. A Guard fixed charge (Rs 5,000, Bills) sits on
+SadaPay. The loan is Rs 90,000 at Rs 9,000/month, next payment this month. Goal Bicycle: Rs 10,000/mo, Rs 10,000
+of Rs 50,000 saved. SadaPay ledger balance Rs 25,000.
 
-- C = 5,000 (Guard) + 9,000 (loan) + 2,000 (Subscriptions, no recurring row) = **16,000**. Bills is covered by
-  Guard, so Electricity's average is not added.
+- C = 5,000 (Guard) + 9,000 (loan) + 2,000 (Subscriptions, no fixed charge) = **16,000**. Bills is covered by
+  Guard, so Electricity is not added.
 - V = 30,000 + 10,000 = **40,000**. G = **10,000**.
 - S = 85,000 − 16,000 − 40,000 − 10,000 = **Rs 19,000**.
 - floor = 10,000 (envelope) + 5,000 (Guard) = 15,000. F = 25,000 − 15,000 = **Rs 10,000**.
-- Lever "Food −50%" → V = 25,000, S = 34,000.
+- Lever "Food −50%" → V = 25,000, S = 34,000. A Food budget of Rs 25,000 does the same, with source `budget`.
+
+## Projection
+
+`project(ds, now, assumptions?)` runs month by month from **next month** for `horizon_months`. This month's
+installment and goal contribution, if still due, are taken from this month's money.
+
+Assumptions (`ForecastAssumptions`) come from setting `forecast` (JSON, read leniently: a malformed part falls back
+to its default), and each call may override them:
+
+- `horizon_months` (12);
+- `income` step changes `{from, amount}`;
+- `spend_adjust_pct` (0);
+- `category_adjust` (`{category_id, pct}`);
+- `one_offs` `{month, amount (+ in / − out), label}`;
+- `uncertainty` (low / normal / high).
+
+Per month:
+
+- income = the latest step with from ≤ month, else `income_monthly`;
+- fixed = fixed charges + planned fixed categories without a fixed charge;
+- variable.expected = Σ variable planned spend (after `category_adjust`) × (1 + spend_adjust_pct/100);
+- **spread**:
+  - with ≥ 3 complete tracked months of history: the standard deviation of their monthly variable totals (at
+    least 5% of expected), × 0.5 / 1 / 1.5 for low / normal / high uncertainty;
+  - otherwise 5% / 15% / 30% of expected;
+- variable.low = expected − spread (floored at 0), variable.high = expected + spread;
+- goals = each unachieved goal's monthly until it is reached; loans = installments due until each loan is repaid;
+- surplus = income − fixed − variable − goals − loans + one_offs. `surplus.low` uses variable.high (a bad month);
+  `surplus.high` uses variable.low;
+- savings = today's free savings + Σ surplus so far (per band); debt = outstanding at month end.
+
+Example (fixture above, flat history → spread = 5% = 2,000): Dec 2026 surplus 19,000 (17,000–21,000), savings
+29,000, debt 72,000. From Mar 2027 Bicycle is complete, so the surplus becomes 29,000. The Aug 2027 installment clears
+the loan.
 
 ## What-if (price P)
 
+`whatIf` is projection-based. It still returns the legacy `verdict`. It adds `projection` (with the purchase
+applied), `ready_month_range`, `risk_months` and `confidence`:
+
+- solid = works in the bad case;
+- likely = works in the expected case;
+- risky = works only in the good case;
+- no = doesn't work.
+
+"Works" means ready within **6 months** in save mode, and the surplus covering every repayment in loan mode.
+
 **Save mode.**
 
-- F ≥ P → **now**: "Affordable now — leaves Rs (F − P) free in SadaPay".
-- Otherwise need = P − max(F, 0).
-  - S ≤ 0 → **no**: "Not affordable — your monthly surplus is −Rs …".
-  - Otherwise m = ⌈need / S⌉ months, plan = ⌈need / m⌉ rounded up to a whole rupee, ready = this month + m.
-    The verdict is **easy** if m ≤ 1, **stretch** if 2 ≤ m ≤ 6, **no** if m > 6.
-  - Goals don't slip, because plan ≤ S.
+- F ≥ P (and no later `start_month`) → **now**, solid: "Affordable now — leaves Rs (F − P) free in SadaPay".
+- Otherwise ready = the first projected month whose savings reach P, for savings.high / expected / low → best /
+  expected / worst.
+- verdict from m = months to the expected ready month: **easy** if m ≤ 1, **stretch** if m ≤ 6, else **no**.
+  plan = ⌈(P − max(F, 0)) / m⌉ to the rupee.
+- Headline:
+  - all three months equal: "Ready by Feb 2027 — save Rs 16,667/month";
+  - a range: "Ready between Jan and Mar 2027 (most likely Feb)";
+  - beyond 6 months: "Not within 6 months — ready between Jul and Aug 2027 (most likely Jul)";
+  - never and S ≤ 0: "Not affordable — your monthly surplus is −Rs …".
 
-With the example (S = 19,000, F = 10,000):
+Examples (S = 19,000, F = 10,000):
 
-| P       | Result                                                                                                               |
-| ------- | -------------------------------------------------------------------------------------------------------------------- |
-| 8,000   | now: "Affordable now — leaves Rs 2,000 free in SadaPay"                                                              |
-| 25,000  | need 15,000, m = 1, easy: "Save Rs 15,000/month for 1 month — ready Dec 2026"                                        |
-| 60,000  | need 50,000, m = 3, stretch: "Save Rs 16,667/month for 3 months — ready Feb 2027"                                    |
-| 200,000 | need 190,000, m = 10, no: "Not affordable within 6 months — saving Rs 19,000/month takes 10 months (ready Sep 2027)" |
+| P                                        | Result                                                                       |
+| ---------------------------------------- | ---------------------------------------------------------------------------- |
+| 8,000                                    | now, solid: "Affordable now — leaves Rs 2,000 free in SadaPay"               |
+| 25,000                                   | easy, solid: "Ready by Dec 2026 — save Rs 15,000/month"                      |
+| 60,000                                   | stretch, solid: "Ready by Feb 2027 — save Rs 16,667/month"                   |
+| 200,000                                  | no: "Not within 6 months — ready between Jul and Aug 2027 (most likely Jul)" |
+| 60,000 with Food 20k/30k/40k (σ ≈ 8,165) | stretch, solid: "Ready between Jan and Mar 2027 (most likely Feb)"           |
 
-**Loan mode** (n months).
+**Loan mode.** You give one of:
 
-- installment = ⌈P / n⌉, rounded up to a whole rupee. Existing installments are already in C, so the new one is
-  compared with S.
-- Verdict: S ≤ 0 → **no**. Otherwise installment ≤ 50% of S → **easy**; ≤ S → **stretch**; else **no**.
-- **debt_free_month** simulates month by month from this month:
-  - each existing loan pays from its next payment month, and the new loan from next month;
-  - the monthly debt budget is the sum of the installments of loans that have started;
-  - the budget pays the oldest loan first, so a cleared loan's installment rolls onto the next one.
-- **goal_delays**: shortfall = max(0, installment − max(S, 0)). For n months it is taken out of goal contributions,
-  lowest-priority goal first. Each goal's ETA is recomputed, and the delay is the number of months it slips.
+- `loan_months` n → installment = ⌈P / n⌉ to the rupee;
+- `installment` → n = ⌈P / installment⌉;
+- a custom `schedule` of `{month, amount}`.
 
-Examples (S = 19,000; an existing Rs 90,000 loan at Rs 9,000/month):
+Repayments start at `start_month` or next month. They are added to the projection as a loan, and the purchase
+itself doesn't touch savings.
 
-- P = 90,000 over 10 → installment 9,000 ≤ 9,500 → **easy**. Both loans clear by **Sep 2027**: "Rs 9,000/month
-  over 10 months — debt-free by Sep 2027".
-- P = 150,000 over 10 → 15,000 ≤ 19,000 → **stretch**.
-- P = 300,000 over 10 → 30,000 > 19,000 → **no**. The shortfall of 11,000/month takes Bicycle's whole Rs 10,000 for
-  10 months, so its ETA moves from Feb 2027 to Dec 2027 (**10 months**).
+- **risk_months** = repayment months whose bad-case surplus is negative.
+- **confidence** = solid if every repayment month's bad-case surplus is ≥ 0, likely if the expected case is,
+  risky if only the good case is, else no. A schedule that sums to less than P → no: "Your schedule repays only
+  Rs X of Rs P".
+- Legacy **verdict**: S ≤ 0 → no; installment ≤ 50% of S → easy; ≤ S → stretch; else no.
+- **debt_free_month** = the first month with no debt, every loan paid at its own installment from its next
+  payment month.
+- **goal_delays**: shortfall = max(0, installment − max(S, 0)). For the repayment months it is taken out of goal
+  contributions, lowest-priority goal first. Each goal's ETA is recomputed, and the delay is the number of months
+  it slips.
+
+Examples (an existing Rs 90,000 loan at Rs 9,000/month):
+
+- P = 90,000 over 10: "Rs 9,000/month over 10 months works even in a bad month — debt-free by Sep 2027". The
+  existing loan clears in Aug and the new one in Sep.
+- P = 190,000 over 10, with Food 20k/30k/40k: "Rs 19,000/month over 10 months works in a normal month; 3 bad months
+  would be tight — debt-free by Sep 2027". The risk months are Dec–Feb; once Bicycle completes in Mar there is
+  room again.
+- P = 300,000 over 10 → "Not affordable — Rs 30,000/month is more than your Rs 19,000 monthly surplus". Bicycle
+  slips **10 months**.
 
 **Waterfall:** income → −C → −V → −G → surplus → −(monthly plan or installment) → left. For the P = 90,000 loan
 that's 85,000 → −16,000 → −40,000 → −10,000 → 19,000 → −9,000 → **10,000 left**.
@@ -249,29 +366,41 @@ that's 85,000 → −16,000 → −40,000 → −10,000 → 19,000 → −9,000 
 
 Example: Bicycle, Rs 40,000 remaining at Rs 10,000/month, nothing moved yet in Nov → Nov + 3 = **Feb 2027**.
 
-## Suggested split
+## Allocation (income split)
 
-- **SadaPay** = active recurring on SadaPay + loan installments + averages of fixed categories with no recurring
-  row + goal contributions.
-- **NayaPay** = max(0, income − SadaPay).
+`allocation(ds, now)` returns the user's split when setting `allocation_sadapay` is set (NayaPay gets the rest),
+otherwise the suggestion:
 
-Example: 5,000 + 9,000 + 2,000 + 10,000 = **Rs 26,000** to SadaPay, and **Rs 59,000** to NayaPay.
+- **SadaPay** = SadaPay fixed charges + loan installments + goal contributions + planned spend (budget ?? average)
+  of categories whose wallet hint is SadaPay and that aren't covered by a fixed charge.
+- **NayaPay** = income − SadaPay (≥ 0).
+- If all of that is 0 (nothing entered yet), the suggestion is **50/50** with the line "Add your fixed charges to
+  get a real suggestion". It is never a silent 0 / 85,000.
+
+Example: 5,000 + 9,000 + 10,000 + 2,000 (Subscriptions) = **Rs 26,000** to SadaPay, **Rs 59,000** to NayaPay.
+On an empty ledger, Rs 42,500 / Rs 42,500. With only a Bills budget of Rs 12,000, it is Rs 12,000 / Rs 73,000.
 
 ## Month close checklist
 
 **Block items** (all must pass):
 
-| Item                        | Passes when                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| month ended                 | today ≥ the 1st of next month (SadaPay statements exclude today), which is `closable_from`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| statements, per wallet      | the union of statement periods covers every day of the month; otherwise the gaps are listed, e.g. "NayaPay statement missing for 16–31 Oct"                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| statement checks            | every check on statements overlapping the month passes, and for each pair of back-to-back statements (next.from = prev.to + 1 day) with both values known, \|prev.closing − next.opening\| ≤ Rs 1                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| unverified                  | no provisional or disputed transactions in the month                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| uncategorised               | every `spend`/`fee` transaction in the month has a category                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| closing balance, per wallet | derivable at the last day 23:59, trying in order: (1) a statement covering that day with a known closing (closing − Σ transactions after month end up to the statement's end); (2) the opening of a statement starting the next day; (3) if statements cover the whole month, any balance anchor (statement or manual): the latest one at/before month end + Σ transactions up to month end (statements must also cover from its day), else the earliest one after month end − Σ transactions between month end and it. SadaPay statements carry no balances, so a manual balance entered after month end is enough there |
+| Item                        | Passes when                                                                                                                                                                                                                                          |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| previous month closed       | the month before is closed (when it is tracked); months close in order                                                                                                                                                                               |
+| month ended                 | today ≥ the 1st of next month (SadaPay statements exclude today), which is `closable_from`                                                                                                                                                           |
+| statements, per wallet      | the union of statement periods covers every day of the month; otherwise the gaps are listed, e.g. "NayaPay statement missing for 16–31 Oct"                                                                                                          |
+| statement checks            | every check on statements overlapping the month passes, and for each pair of back-to-back statements (next.from = prev.to + 1 day) with both values known, \|prev.closing − next.opening\| ≤ Rs 1                                                    |
+| unverified                  | no provisional or disputed transactions in the month                                                                                                                                                                                                 |
+| uncategorised               | every `spend`/`fee` transaction in the month has a category                                                                                                                                                                                          |
+| closing balance, per wallet | the ledger closing (b/f + transactions) is trustworthy: the first month's b/f came from a statement or was set by you, or some balance assertion exists for that wallet. SadaPay statements carry no balances, so a balance you type is enough there |
+| reconciles, per wallet      | for every statement of the wallet ending in the month with a closing: \|ledger at period_to 23:59 − closing\| ≤ Rs 1, e.g. "SadaPay ledger Rs 799 ≠ statement closing Rs 800 on 31 Oct (off by Rs 2)"                                                |
+
+A month before tracking start gets a single blocking item ("Oct 2026 is before tracking started (1 Nov 2026) —
+nothing to close"), so it can never be closed or nagged about.
 
 **Warn items:**
 
+- the latest balance you typed in the month differs from the ledger at that moment by more than Rs 1;
 - a `spend` transfer to a person (by description) with no reason;
 - an active recurring payment with no outflow in the month on its wallet within ±10% of its amount and matching
   its counterparty or category;
@@ -280,7 +409,8 @@ Example: 5,000 + 9,000 + 2,000 + 10,000 = **Rs 26,000** to SadaPay, and **Rs 59,
 Labels carry counts and amounts, e.g. "Categorise 2 transactions (Rs 800)", and each item links to a route that
 fixes it, e.g. `/activity?month=2026-10&filter=untagged`.
 
-`closeMonth` refuses with every blocking label when `can_close` is false.
+`closeMonth` refuses with every blocking label when `can_close` is false; otherwise it writes the c/f and next b/f
+(see Accounting model).
 
 ## Closed months
 
@@ -293,13 +423,18 @@ fixes it, e.g. `/activity?month=2026-10&filter=untagged`.
   because a merge only renames who the money went to; it doesn't change it.
 - A statement import that overlaps a closed month succeeds only if it changes nothing there. An identical
   re-import is a no-op.
+- b/f and c/f rows can't be edited by any command. Only `closeMonth`, `reopenMonth`, `setOpeningBalance` (first
+  month, while open), imports (first month's b/f) and `resetLedger` write them.
+- **resetLedger** (step-up, `confirm: "RESET"`, start = 1st of a month) deletes every transaction, statement,
+  balance entry, month record, notification and goal move. It sets `tracking_start` and re-creates the first
+  month's b/f at 0. Configuration is kept. `tracking_start` can't be changed with `setSetting`.
 
 ## Snapshot
 
 `buildSnapshot(ds, month)` writes canonical JSON:
 
 - what it contains:
-  - the month's transactions;
+  - the month's transactions, including its b/f and (once closed) c/f rows;
   - statements overlapping the month;
   - balance entries from the previous month's last 23:59 to this month's last 23:59;
   - the categories referenced, with their parents;

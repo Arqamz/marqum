@@ -8,6 +8,7 @@ import { requireDevice } from "./lib/auth.ts";
 import { exportAll, nightlyBackup } from "./lib/backup.ts";
 import { ApiError } from "./lib/http.ts";
 import { currentVersion } from "./lib/store.ts";
+import { admin } from "./routes/admin.ts";
 import { auth, login } from "./routes/auth.ts";
 import { ingest } from "./routes/ingest.ts";
 import { months } from "./routes/months.ts";
@@ -38,10 +39,11 @@ app.get("/health", async (c) => c.json({ ok: true, version: await currentVersion
 app.route("/auth/login", login);
 app.route("/auth", auth);
 
-for (const path of ["/sync/*", "/ingest/*", "/months/*", "/export"]) app.use(path, requireDevice);
+for (const path of ["/sync/*", "/ingest/*", "/months/*", "/export", "/admin/*"]) app.use(path, requireDevice);
 app.route("/sync", sync);
 app.route("/ingest", ingest);
 app.route("/months", months);
+app.route("/admin", admin);
 app.get("/export", async (c) => {
   c.header("Content-Disposition", `attachment; filename="marqum-export.json"`);
   return c.json(await exportAll(c.env.DB));

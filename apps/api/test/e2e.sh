@@ -35,9 +35,15 @@ for _ in $(seq 1 60); do
 done
 curl -sf "http://localhost:$PORT/api/health" >/dev/null || { cat "$STATE/dev.log"; exit 1; }
 
-node --experimental-strip-types --no-warnings test/e2e.ts "http://localhost:$PORT" "$PASSCODE" || {
+node --experimental-strip-types --no-warnings test/e2e.ts "http://localhost:$PORT" "$PASSCODE" | tee "$STATE/e2e.out" || {
   echo "--- wrangler dev log ---"; tail -50 "$STATE/dev.log"; exit 1;
 }
+
+# Pre-reset export → R2 resets/<timestamp>.json
+RESET_KEY="$(sed -n 's/^RESET_KEY=//p' "$STATE/e2e.out" | head -1)"
+"$WRANGLER" r2 object get "marqum-backups/$RESET_KEY" --local --persist-to "$STATE" --file "$STATE/reset.json" >/dev/null
+node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(!(d.tables.transactions?.length>=3)) process.exit(1)' "$STATE/reset.json"
+echo "✓ pre-reset export written to $RESET_KEY (contains the wiped transactions)"
 
 # Nightly backup cron → R2 nightly/<Karachi date>.json
 curl -sf "http://localhost:$PORT/cdn-cgi/handler/scheduled?cron=0+21+*+*+*" >/dev/null

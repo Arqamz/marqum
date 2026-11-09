@@ -49,6 +49,11 @@ export const PullResponse = z.object({
   changes: z.record(z.string(), z.array(z.record(z.string(), z.unknown()))),
   /** true if more pages remain; client should pull again with `since=version` */
   more: z.boolean(),
+  /**
+   * Ledger epoch. Changes when the ledger is reset (resetLedger). A client whose stored epoch differs must
+   * drop its local replica and outbox, then pull from since=0.
+   */
+  epoch: z.string(),
 });
 
 /** Raw notification posted by the Android NotificationListenerService (only NayaPay/SadaPay packages). */

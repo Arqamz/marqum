@@ -14,6 +14,7 @@ import {
   seeded,
   stmt,
   txn,
+  withOpening,
   withRows,
 } from "./builders.ts";
 
@@ -21,9 +22,9 @@ const NOW = "2026-11-08T10:00";
 const item = (ds: Dataset, id: string, now = NOW) =>
   closeChecklist(ds, "2026-10", now).items.find((i) => i.id === id);
 
-/** October fully covered by both wallets' statements, everything verified and categorised. */
+/** October = first tracked month, fully covered by both wallets' statements, verified and categorised. */
 function closable(): Dataset {
-  return withRows(seeded(), {
+  return withRows(withOpening(seeded("2026-10-01"), { sadapay: 100000, nayapay: 5000 }), {
     statements: [
       stmt("sadapay", "2026-10-01", "2026-10-31", { opening: 100000, closing: 80000 }),
       stmt("nayapay", "2026-10-01", "2026-10-15", { opening: 5000, closing: 3000 }),
@@ -61,6 +62,9 @@ describe("closeChecklist", () => {
     expect(c.can_close).toBe(true);
     expect(c.items.find((i) => i.id === "closing_sadapay")?.label).toBe(
       "SadaPay closing balance on 31 Oct: Rs 800",
+    );
+    expect(c.items.find((i) => i.id === "reconcile_nayapay")?.label).toBe(
+      "NayaPay ledger matches the statement closing",
     );
     expect(c.items.find((i) => i.id === "statements_nayapay")?.label).toBe(
       "NayaPay statements cover 1–31 Oct",
@@ -130,66 +134,70 @@ describe("closeChecklist", () => {
       action: "/activity?month=2026-10&filter=untagged",
     });
   });
-  it("closing balance is derived from a statement extending past month end, else blocks", () => {
-    const ds = withRows(seeded(), {
-      statements: [stmt("sadapay", "2026-10-01", "2026-11-07", { closing: 50000 })],
-      transactions: [txn({ account_id: "sadapay", occurred_at: "2026-11-03T10:00", amount: -10000 })],
-    });
-    expect(item(ds, "closing_sadapay")?.label).toBe("SadaPay closing balance on 31 Oct: Rs 600");
-    expect(item(ds, "closing_nayapay")).toMatchObject({
-      ok: false,
-      label: "NayaPay closing balance on 31 Oct unknown — import a statement covering it",
-    });
-    const next = withRows(seeded(), {
-      statements: [stmt("nayapay", "2026-11-01", "2026-11-07", { opening: 7000 })],
-    });
-    expect(item(next, "closing_nayapay")?.label).toBe("NayaPay closing balance on 31 Oct: Rs 70");
-  });
-  it("SadaPay with no statement balances: closing derived from a manual entry after month end", () => {
-    const ds = withRows(seeded(), {
-      statements: [stmt("sadapay", "2026-10-01", "2026-10-31")],
+  it("blocks when the ledger closing disagrees with a statement closing by more than Rs 1", () => {
+    const ds = withRows(closable(), {
       transactions: [
-        txn({ account_id: "sadapay", occurred_at: "2026-10-20T10:00", amount: -5000 }),
-        txn({ account_id: "sadapay", occurred_at: "2026-11-03T10:00", amount: -20000 }),
-        prov({ account_id: "sadapay", occurred_at: "2026-11-06T10:00", amount: 1000 }),
+        txn({ account_id: "sadapay", occurred_at: "2026-10-25T10:00", amount: -150, category_id: "misc" }),
       ],
-      balances: [bal("sadapay", "2026-11-07T09:00", 100000)],
     });
-    // 1,000 = x − 200 + 10 → x = 1,190
-    expect(item(ds, "closing_sadapay")).toMatchObject({
-      ok: true,
-      label: "SadaPay closing balance on 31 Oct: Rs 1,190",
+    expect(item(ds, "reconcile_sadapay")).toMatchObject({
+      ok: false,
+      label: "SadaPay ledger Rs 799 ≠ statement closing Rs 800 on 31 Oct (off by Rs 2)",
     });
+    const tiny = withRows(closable(), {
+      transactions: [
+        txn({ account_id: "sadapay", occurred_at: "2026-10-25T10:00", amount: -100, category_id: "misc" }),
+      ],
+    });
+    expect(item(tiny, "reconcile_sadapay")?.ok).toBe(true);
   });
-  it("SadaPay closing derived forward from a manual entry inside a covered month", () => {
-    const ds = withRows(seeded(), {
-      statements: [stmt("sadapay", "2026-10-01", "2026-10-31")],
-      balances: [bal("sadapay", "2026-10-02T10:00", 100000), bal("sadapay", "2026-11-07T09:00", 1)],
-      transactions: [txn({ account_id: "sadapay", occurred_at: "2026-10-20T10:00", amount: -5000 })],
-    });
-    expect(item(ds, "closing_sadapay")?.label).toBe("SadaPay closing balance on 31 Oct: Rs 950");
-  });
-  it("SadaPay closing unknown without any anchor, or when statements don't cover the month", () => {
-    const noAnchor = withRows(seeded(), { statements: [stmt("sadapay", "2026-10-01", "2026-10-31")] });
-    expect(item(noAnchor, "closing_sadapay")?.ok).toBe(false);
-    const gap = withRows(seeded(), {
-      statements: [stmt("sadapay", "2026-10-01", "2026-10-20")],
-      balances: [bal("sadapay", "2026-11-07T09:00", 100000)],
-    });
-    expect(item(gap, "closing_sadapay")?.ok).toBe(false);
-  });
-  it("a whole month closes with SadaPay statements that carry no balances", () => {
+  it("needs an established opening: statement/set b/f, or any balance assertion", () => {
     const base = closable();
-    const ds = withRows(
-      {
-        ...base,
-        statements: base.statements.map((s) =>
-          s.account_id === "sadapay" ? { ...s, opening: null, closing: null } : s,
-        ),
-      },
-      { balances: [bal("sadapay", "2026-11-05T10:00", 80000)] },
-    );
+    const unknown = {
+      ...base,
+      statements: base.statements.map((s) =>
+        s.account_id === "sadapay" ? { ...s, opening: null, closing: null } : s,
+      ),
+      transactions: base.transactions.map((t) =>
+        t.flow === "carry" && t.account_id === "sadapay" ? { ...t, reason: null } : t,
+      ),
+    };
+    expect(item(unknown, "closing_sadapay")).toMatchObject({
+      ok: false,
+      label: "SadaPay opening balance unknown — set it or record your current balance",
+    });
+    // SadaPay statements carry no balances: a manual balance (any time after tracking start) is enough
+    const manual = withRows(unknown, { balances: [bal("sadapay", "2026-11-05T10:00", 80000)] });
+    expect(item(manual, "closing_sadapay")?.ok).toBe(true);
+    expect(closeChecklist(manual, "2026-10", NOW).can_close).toBe(true);
+  });
+  it("warns when a manual balance in the month doesn't match the ledger", () => {
+    const ds = withRows(closable(), { balances: [bal("nayapay", "2026-10-31T20:00", 1500)] });
+    const i = item(ds, "unaccounted_nayapay");
+    expect(i).toMatchObject({
+      ok: false,
+      severity: "warn",
+      label: "NayaPay: Rs 5 unaccounted vs the balance you entered on 31 Oct",
+    });
     expect(closeChecklist(ds, "2026-10", NOW).can_close).toBe(true);
+  });
+  it("months before tracking start have nothing to close", () => {
+    const c = closeChecklist(closable(), "2026-09", NOW);
+    expect(c).toMatchObject({ can_close: false });
+    expect(c.items).toEqual([
+      expect.objectContaining({
+        id: "before_tracking",
+        label: "Sep 2026 is before tracking started (1 Oct 2026) — nothing to close",
+      }),
+    ]);
+    expect(execute(closable(), cmd("closeMonth", { month: "2026-09" }), ctx(NOW)).error).toBe("invalid");
+  });
+  it("a month can only be closed after the previous one", () => {
+    const nov = closeChecklist(closable(), "2026-11", "2026-12-02T10:00");
+    expect(nov.items.find((i) => i.id === "previous_closed")).toMatchObject({
+      ok: false,
+      label: "Close Oct 2026 first",
+    });
   });
   it("warns (not blocks) on person transfers without reasons, unseen recurring and unseen loan installments", () => {
     const ds = withRows(closable(), {
@@ -210,20 +218,20 @@ describe("closeChecklist", () => {
       ],
     });
     const c = closeChecklist(ds, "2026-10", NOW);
-    expect(c.can_close).toBe(true);
-    expect(c.items.find((i) => i.id === "reasons")).toMatchObject({
-      ok: false,
-      severity: "warn",
-      label: "Add a reason to 1 transfer to people (Rs 1,500)",
-    });
-    expect(c.items.find((i) => i.id === "recurring")).toMatchObject({
-      ok: false,
-      label: "1 recurring payment not seen: iCloud (Rs 900)",
-    });
-    expect(c.items.find((i) => i.id === "loans")).toMatchObject({
-      ok: false,
-      label: "Loan installment not seen: Bicycle (Rs 9,000)",
-    });
+    expect(c.items.filter((i) => i.severity === "warn" && !i.ok).map((i) => i.id)).toEqual([
+      "reasons",
+      "recurring",
+      "loans",
+    ]);
+    expect(c.items.find((i) => i.id === "reasons")?.label).toBe(
+      "Add a reason to 1 transfer to people (Rs 1,500)",
+    );
+    expect(c.items.find((i) => i.id === "recurring")?.label).toBe(
+      "1 recurring payment not seen: iCloud (Rs 900)",
+    );
+    expect(c.items.find((i) => i.id === "loans")?.label).toBe(
+      "Loan installment not seen: Bicycle (Rs 9,000)",
+    );
   });
 });
 
@@ -242,7 +250,7 @@ describe("buildSnapshot", () => {
     expect(sa.json).not.toContain('"version"');
     const doc = JSON.parse(sa.json);
     expect(Object.keys(doc)).toEqual([...Object.keys(doc)].sort());
-    expect(doc.transactions).toHaveLength(3);
+    expect(doc.transactions).toHaveLength(5); // 3 + the two b/f rows
     expect(doc.categories.map((c: { id: string }) => c.id)).toEqual(["bills", "bills.electricity", "food"]);
   });
   it("changes when month content changes, not when other months change", async () => {
@@ -250,7 +258,7 @@ describe("buildSnapshot", () => {
     const base = await buildSnapshot(a, "2026-10");
     const other = withRows(a, { transactions: [txn({ occurred_at: "2026-11-02T10:00", amount: -1 })] });
     expect((await buildSnapshot(other, "2026-10")).sha256).toBe(base.sha256);
-    const t0 = a.transactions[0];
+    const t0 = a.transactions.find((t) => t.flow !== "carry");
     const changed = apply(a, t0 ? [{ table: "transactions", row: { ...t0, reason: "edited" } }] : []);
     expect((await buildSnapshot(changed, "2026-10")).sha256).not.toBe(base.sha256);
   });

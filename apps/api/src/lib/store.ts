@@ -38,10 +38,50 @@ export interface PullPage {
   version: number;
   changes: Record<string, Record<string, unknown>[]>;
   more: boolean;
+  epoch: string;
+}
+
+/** Tables wiped by resetLedger (configuration tables are kept). */
+export const LEDGER_TABLES = [
+  "transactions",
+  "statements",
+  "balances",
+  "months",
+  "notifications",
+  "goal_moves",
+] as const;
+
+const newEpoch = () => {
+  const b = crypto.getRandomValues(new Uint8Array(12));
+  return [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+};
+
+/** Current ledger epoch; created on first use. Changes on every resetLedger. */
+export async function getEpoch(db: D1Database): Promise<string> {
+  const row = await db.prepare("SELECT value FROM meta WHERE key = 'epoch'").first<{ value: string }>();
+  if (row) return row.value;
+  await db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('epoch', ?)").bind(newEpoch()).run();
+  return (
+    (await db.prepare("SELECT value FROM meta WHERE key = 'epoch'").first<{ value: string }>())?.value ?? ""
+  );
+}
+
+/**
+ * After a reset: hard-delete tombstoned ledger rows (clients on the new epoch re-pull from 0, so they need no
+ * tombstones) and switch to a new epoch, in one transaction. Returns the new epoch.
+ */
+export async function purgeLedgerTombstones(db: D1Database): Promise<string> {
+  const epoch = newEpoch();
+  const marks = LEDGER_TABLES.map(() => "?").join(", ");
+  await db.batch([
+    db.prepare(`DELETE FROM rows WHERE deleted = 1 AND tbl IN (${marks})`).bind(...LEDGER_TABLES),
+    db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('epoch', ?)").bind(epoch),
+  ]);
+  return epoch;
 }
 
 /** Shape a pull page from up to `limit + 1` records ordered by version. */
-export function pullPage(records: RowRecord[], since: number, limit = PULL_LIMIT): PullPage {
+export function pullPage(records: RowRecord[], since: number, limit = PULL_LIMIT): Omit<PullPage, "epoch"> {
   const more = records.length > limit;
   const page = more ? records.slice(0, limit) : records;
   const changes: Record<string, Record<string, unknown>[]> = {};
@@ -71,7 +111,7 @@ export async function pull(db: D1Database, since: number): Promise<PullPage> {
     .prepare("SELECT tbl, id, version, deleted, data FROM rows WHERE version > ? ORDER BY version LIMIT ?")
     .bind(from, PULL_LIMIT + 1)
     .all<RowRecord>();
-  return pullPage(results, from);
+  return { ...pullPage(results, from), epoch: await getEpoch(db) };
 }
 
 const UPSERT = `INSERT INTO rows (tbl, id, version, deleted, data)
@@ -131,5 +171,6 @@ export async function ensureSeeded(db: D1Database, now: string): Promise<void> {
     if (any) await mark.run();
     else await writeMutations(db, seedMutations(now), [mark]);
   }
+  await getEpoch(db);
   seeded = true;
 }
