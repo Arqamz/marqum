@@ -20,7 +20,12 @@ The goal is an app that feels calm, specific and fast: you open it, see where yo
 
 ## Colour
 
-- **Neutrals** carry the UI. **One accent** (indigo, `--accent`) is used for the primary action, the current selection and focus. Nothing else uses it.
+- **Ink and paper.** The UI is warm paper neutrals with ink type; there is no brand hue.
+  - Light: paper background `#F7F6F2`, surfaces a touch whiter, ink `#16181D`.
+  - Dark: background `#121214`, surfaces a step lighter, paper-coloured type `#F4F1EA`.
+- **The accent is ink** (`--accent`): near-black on paper in light mode, paper on ink in dark mode.
+  It marks the primary action, the current selection and focus. Nothing else uses it.
+- **The only hues in the UI are the semantic colours below.** No purple, blue or brand tints anywhere, charts included (charts use ink greys).
 - **Semantic colours** have fixed meanings and are never used for decoration:
   - green: below average / on track;
   - red: above average, debt, a failed check;

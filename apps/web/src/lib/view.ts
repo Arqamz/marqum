@@ -46,6 +46,7 @@ export const FLOW_LABEL: Record<Flow, string> = {
   loan_in: "Loan received",
   loan_repay: "Loan repayment",
   reimbursement: "Paid back to me",
+  carry: "Brought or carried forward",
 };
 
 export const OUT_FLOWS: Flow[] = ["spend", "internal", "loan_repay", "fee"];

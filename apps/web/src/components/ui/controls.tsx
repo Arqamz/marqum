@@ -33,6 +33,7 @@ export function Slider({
   max,
   step = 1,
   label,
+  centered,
 }: {
   value: number;
   onValueChange: (v: number) => void;
@@ -40,6 +41,8 @@ export function Slider({
   max: number;
   step?: number;
   label: string;
+  /** two-sided (−/+) values: no fill from the left, a tick at zero instead */
+  centered?: boolean;
 }) {
   return (
     <RSlider.Root
@@ -51,7 +54,11 @@ export function Slider({
       className="relative flex h-8 w-full touch-none items-center select-none"
     >
       <RSlider.Track className="relative h-1 grow rounded-full bg-surface-3">
-        <RSlider.Range className="absolute h-full rounded-full bg-accent" />
+        {centered ? (
+          <span className="absolute top-1/2 left-1/2 h-3 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-border-strong" />
+        ) : (
+          <RSlider.Range className="absolute h-full rounded-full bg-accent" />
+        )}
       </RSlider.Track>
       <RSlider.Thumb
         aria-label={label}
@@ -87,7 +94,7 @@ export function Segmented<T extends string>({
         <RadioGroup.Item
           key={o.value}
           value={o.value}
-          className="h-8 flex-1 rounded-inner px-3 text-sm font-medium text-fg-muted transition-colors data-[state=checked]:bg-surface data-[state=checked]:text-accent-text"
+          className="h-8 flex-1 rounded-inner px-3 text-sm font-medium text-fg-muted transition-colors data-[state=checked]:bg-accent data-[state=checked]:text-accent-fg"
         >
           {o.label}
         </RadioGroup.Item>
@@ -116,7 +123,7 @@ export function Chip({
       className={cn(
         "inline-flex h-8 shrink-0 items-center gap-1 rounded-full border px-3 text-sm whitespace-nowrap transition-colors",
         selected
-          ? "border-accent bg-accent-soft text-accent-text"
+          ? "border-accent bg-accent text-accent-fg"
           : "border-border bg-surface text-fg-muted hover:text-fg",
         className,
       )}

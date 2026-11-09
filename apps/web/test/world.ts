@@ -203,6 +203,9 @@ export function buildWorld(): World {
     return res;
   };
 
+  // History starts in May for the synthetic world (the real default is 1 Nov 2026).
+  run("resetLedger", { tracking_start: "2026-05-01", confirm: "RESET" });
+
   let naya = 12000;
   let sada = 40000;
   const months = ["2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"];

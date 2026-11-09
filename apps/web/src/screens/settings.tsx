@@ -1,4 +1,16 @@
-import { type Dataset, dayLabel, formatRs, karachiNow, netPosition, parseRs, setting } from "@marqum/core";
+import {
+  addMonths,
+  type Dataset,
+  dayLabel,
+  formatRs,
+  karachiNow,
+  monthLabel,
+  monthLedger,
+  monthOf,
+  netPosition,
+  parseRs,
+  setting,
+} from "@marqum/core";
 import type { AccountId, NotificationIngest } from "@marqum/schema";
 import { API } from "@marqum/schema";
 import { Link } from "@tanstack/react-router";
@@ -17,9 +29,10 @@ import { api } from "../lib/api.ts";
 import { auth } from "../lib/auth.ts";
 import { enqueue, newId } from "../lib/commands.ts";
 import { isNative } from "../lib/platform.ts";
-import { biometricEnrolled, enrolBiometric, registerPasskey } from "../lib/stepup.ts";
+import { biometricEnrolled, enrolBiometric, registerPasskey, stepUp } from "../lib/stepup.ts";
 import { resetLocalData } from "../lib/sync.ts";
 import { toast } from "../lib/toast.ts";
+import { firstTrackedMonth, testRunNote } from "../lib/tracking.ts";
 import { lookup } from "../lib/view.ts";
 import { MarqumNative } from "../native/marqum-native.ts";
 
@@ -51,6 +64,15 @@ function SettingsContent({ ds, now }: { ds: Dataset; now: string }) {
   const np = useMemo(() => netPosition(ds, now), [ds, now]);
   const [balanceFor, setBalanceFor] = useState<AccountId | null>(null);
   const [rules, setRules] = useState(false);
+  const [openingFor, setOpeningFor] = useState<AccountId | null>(null);
+  const [resetOpen, setResetOpen] = useState(false);
+  const firstMonth = firstTrackedMonth(ds);
+  const testRun = testRunNote(ds);
+  const openings = useMemo(() => {
+    const out: Partial<Record<AccountId, number>> = {};
+    for (const a of ds.accounts) out[a.id] = monthLedger(ds, a.id, firstMonth, now).brought_forward;
+    return out;
+  }, [ds, firstMonth, now]);
   const windowSetting = setting(ds, "avg_window") === "3" ? "3" : "6";
 
   return (
@@ -75,11 +97,17 @@ function SettingsContent({ ds, now }: { ds: Dataset; now: string }) {
                 <span className="flex flex-col">
                   <span>{w.name}</span>
                   <span className="text-sm text-fg-muted">
-                    {w.verified_until ? `verified to ${dayLabel(w.verified_until)}` : "no statement yet"} ·
-                    tap to record today's balance
+                    {w.verified_until ? `verified to ${dayLabel(w.verified_until)}` : "no statement yet"}
                   </span>
                 </span>
                 <Money value={w.balance} className="font-medium" />
+              </Row>
+              <Row onClick={() => setOpeningFor(w.account_id)}>
+                <span className="text-sm text-fg-muted">Opening balance, 1 {monthLabel(firstMonth)}</span>
+                <span className="flex items-center gap-2 text-sm text-fg-muted">
+                  <Money value={openings[w.account_id] ?? 0} />
+                  <ChevronRight className="text-fg-subtle" aria-label="Set opening balance" />
+                </span>
               </Row>
               {w.unaccounted !== 0 ? (
                 <button
@@ -133,9 +161,26 @@ function SettingsContent({ ds, now }: { ds: Dataset; now: string }) {
           </Row>
         </div>
         <AppVersion />
+        {testRun ? <p className="text-sm text-fg-muted">{testRun}</p> : null}
+      </Section>
+
+      <Section title="Danger zone">
+        <div className="-mx-3 flex flex-col">
+          <Row onClick={() => setResetOpen(true)}>
+            <span className="flex flex-col">
+              <span>Reset ledger…</span>
+              <span className="text-sm text-fg-muted">
+                Start tracking again from a new date. Categories, fixed charges, loans and goals stay.
+              </span>
+            </span>
+            <ChevronRight className="text-fg-subtle" aria-hidden />
+          </Row>
+        </div>
       </Section>
 
       <BalanceSheet ds={ds} account={balanceFor} onClose={() => setBalanceFor(null)} />
+      <OpeningSheet ds={ds} account={openingFor} month={firstMonth} onClose={() => setOpeningFor(null)} />
+      <ResetSheet now={now} open={resetOpen} onOpenChange={setResetOpen} />
       <RulesSheet ds={ds} open={rules} onOpenChange={setRules} />
     </>
   );
@@ -526,6 +571,107 @@ function RulesSheet({
           </ul>
         </section>
       </div>
+    </Sheet>
+  );
+}
+
+function OpeningSheet({
+  ds,
+  account,
+  month,
+  onClose,
+}: {
+  ds: Dataset;
+  account: AccountId | null;
+  month: string;
+  onClose: () => void;
+}) {
+  const name = ds.accounts.find((a) => a.id === account)?.name ?? "";
+  const [v, setV] = useState("");
+  const paisa = parseRs(v);
+  return (
+    <Sheet
+      open={account !== null}
+      onOpenChange={(o) => !o && onClose()}
+      title={`${name} opening balance`}
+      description={`What ${name} held when tracking started on 1 ${monthLabel(month)}. It opens ${monthLabel(month)} as "Balance brought forward".`}
+    >
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!account || paisa === null) return;
+          void enqueue("setOpeningBalance", { account_id: account, amount: paisa });
+          setV("");
+          onClose();
+        }}
+      >
+        <MoneyInput label="Opening balance" value={v} onChange={setV} autoFocus />
+        <Button type="submit" variant="primary" size="lg" disabled={paisa === null}>
+          Set opening balance
+        </Button>
+      </form>
+    </Sheet>
+  );
+}
+
+function ResetSheet({
+  now,
+  open,
+  onOpenChange,
+}: {
+  now: string;
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+}) {
+  const [start, setStart] = useState(`${addMonths(monthOf(now), 1)}-01`);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const valid = /^\d{4}-\d{2}-01$/.test(start) && typed === "RESET";
+  return (
+    <Sheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Reset the ledger?"
+      description="Transactions, statements, balances and closed months are deleted on every device. Categories, rules, fixed charges, loans, goals and settings are kept."
+    >
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (!valid) return;
+          setBusy(true);
+          try {
+            const token = await stepUp("Reset the ledger");
+            if (!token) return;
+            await enqueue("resetLedger", { tracking_start: start, confirm: "RESET" });
+            onOpenChange(false);
+            setTyped("");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <Field label="Track from (first day of a month)">
+          <Input
+            type="month"
+            value={start.slice(0, 7)}
+            onChange={(e) => e.target.value && setStart(`${e.target.value}-01`)}
+          />
+        </Field>
+        <Field label="Type RESET to confirm">
+          <Input
+            value={typed}
+            onChange={(e) => setTyped(e.target.value.trim())}
+            autoCapitalize="characters"
+            autoComplete="off"
+            className="font-mono"
+          />
+        </Field>
+        <Button type="submit" variant="primary" size="lg" disabled={!valid} loading={busy}>
+          Reset and track from {dayLabel(start)} {start.slice(0, 4)}
+        </Button>
+      </form>
     </Sheet>
   );
 }

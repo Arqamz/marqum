@@ -43,7 +43,7 @@ export function CategoryPicker({
               className={cn(
                 "flex flex-col items-center gap-1 rounded-control border px-1 py-3 text-xs transition-colors",
                 selected
-                  ? "border-accent bg-accent-soft text-accent-text"
+                  ? "border-accent bg-accent text-accent-fg"
                   : isSuggested
                     ? "border-dashed border-accent text-fg"
                     : "border-transparent bg-surface-2 text-fg hover:bg-surface-3",
@@ -71,7 +71,7 @@ export function CategoryPicker({
       {!showAll && hiddenCount > 0 ? (
         <button
           type="button"
-          className="self-start text-sm text-accent-text"
+          className="self-start text-sm text-fg underline decoration-border-strong underline-offset-4"
           onClick={() => setShowAll(true)}
         >
           Show {hiddenCount} more categories

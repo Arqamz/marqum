@@ -11,7 +11,7 @@ const button = cva(
         primary: "bg-accent text-accent-fg hover:opacity-90",
         secondary: "bg-surface-2 text-fg hover:bg-surface-3",
         ghost: "text-fg hover:bg-surface-2",
-        text: "text-accent-text hover:underline underline-offset-4",
+        text: "text-fg underline decoration-border-strong underline-offset-4 hover:decoration-fg",
         danger: "text-fg-muted hover:bg-surface-2 hover:text-fg",
       },
       size: {

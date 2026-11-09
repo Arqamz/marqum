@@ -1,7 +1,16 @@
 import { LocalNotifications } from "@capacitor/local-notifications";
-import { addMonths, type Dataset, isClosed, karachiNow, monthOf, numericSetting } from "@marqum/core";
+import {
+  addMonths,
+  type Dataset,
+  isClosed,
+  karachiNow,
+  monthOf,
+  monthsToClose,
+  numericSetting,
+} from "@marqum/core";
 import { missingStatements, monthName, untaggedIn } from "./months.ts";
 import { isNative } from "./platform.ts";
+import { isTracked } from "./tracking.ts";
 
 const BASE_ID = 7100;
 const MAX = 20;
@@ -11,9 +20,10 @@ export function reminderMonth(ds: Dataset, now: string): string | null {
   const day = Number(now.slice(8, 10));
   const from = numericSetting(ds, "close_reminder_day") || 25;
   const month = monthOf(now);
-  if (day >= from && !isClosed(ds, month)) return month;
+  if (day >= from && isTracked(ds, month) && !isClosed(ds, month)) return month;
+  // Past months: only ended, unclosed, tracked ones (core's monthsToClose).
   const prev = addMonths(month, -1);
-  if (day <= 7 && !isClosed(ds, prev)) return prev;
+  if (day <= 7 && monthsToClose(ds, now).includes(prev)) return prev;
   return null;
 }
 

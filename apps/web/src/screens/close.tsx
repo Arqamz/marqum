@@ -1,5 +1,4 @@
 import {
-  addMonths,
   type ChecklistItem,
   type CloseChecklist,
   closeChecklist,
@@ -8,6 +7,7 @@ import {
   isClosed,
   monthLabel,
   monthOf,
+  monthsToClose,
 } from "@marqum/core";
 import { API } from "@marqum/schema";
 import { useRouter } from "@tanstack/react-router";
@@ -26,6 +26,7 @@ import { enqueue } from "../lib/commands.ts";
 import { monthName } from "../lib/months.ts";
 import { reminderMonth } from "../lib/reminders.ts";
 import { stepUp } from "../lib/stepup.ts";
+import { isTracked, trackedMonthsUpTo } from "../lib/tracking.ts";
 
 export function CloseScreen({ month }: { month?: string }) {
   const ds = useDataset();
@@ -33,7 +34,11 @@ export function CloseScreen({ month }: { month?: string }) {
   return (
     <Screen>
       {ds ? (
-        <CloseContent ds={ds} now={now} month={month ?? defaultMonth(ds, now)} />
+        <CloseContent
+          ds={ds}
+          now={now}
+          month={month && isTracked(ds, month) ? month : defaultMonth(ds, now)}
+        />
       ) : (
         <div className="flex flex-col gap-3">
           <Skeleton className="h-8 w-2/3" />
@@ -47,10 +52,7 @@ export function CloseScreen({ month }: { month?: string }) {
 }
 
 function defaultMonth(ds: Dataset, now: string): string {
-  const r = reminderMonth(ds, now);
-  if (r) return r;
-  const prev = addMonths(monthOf(now), -1);
-  return isClosed(ds, prev) ? monthOf(now) : prev;
+  return monthsToClose(ds, now)[0] ?? reminderMonth(ds, now) ?? monthOf(now);
 }
 
 /** Core routes → this app's routes. */
@@ -88,28 +90,25 @@ function CloseContent({ ds, now, month }: { ds: Dataset; now: string; month: str
   const [reopen, setReopen] = useState(false);
   const [closing, setClosing] = useState(false);
   const record = ds.months.find((m) => m.id === month);
-  const months = [
-    addMonths(monthOf(now), -3),
-    addMonths(monthOf(now), -2),
-    addMonths(monthOf(now), -1),
-    monthOf(now),
-  ];
+  const months = trackedMonthsUpTo(ds, now).slice(-6);
   const blocking = checklist.items.filter((i) => !i.ok && i.severity === "block");
 
   return (
     <>
-      <div className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none]">
-        {months.map((m) => (
-          <Chip
-            key={m}
-            selected={m === month}
-            onClick={() => void router.navigate({ to: "/close", search: { month: m } })}
-          >
-            {isClosed(ds, m) ? <Lock aria-hidden /> : null}
-            {monthLabel(m)}
-          </Chip>
-        ))}
-      </div>
+      {months.length > 1 ? (
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none]">
+          {months.map((m) => (
+            <Chip
+              key={m}
+              selected={m === month}
+              onClick={() => void router.navigate({ to: "/close", search: { month: m } })}
+            >
+              {isClosed(ds, m) ? <Lock aria-hidden /> : null}
+              {monthLabel(m)}
+            </Chip>
+          ))}
+        </div>
+      ) : null}
 
       {closed ? (
         <section className="flex flex-col items-center gap-4 py-8 text-center" data-testid="sealed">

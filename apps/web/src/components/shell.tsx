@@ -17,7 +17,17 @@ const NAV = [
 export function Wordmark({ className }: { className?: string }) {
   return (
     <span className={cn("inline-flex items-center gap-2 font-display text-lg font-medium", className)}>
-      <img src="/icon.svg" alt="" className="size-7 rounded-inner" />
+      <svg viewBox="0 0 24 24" className="size-7 rounded-inner bg-accent text-accent-fg" aria-hidden>
+        <title>Marqūm</title>
+        <g transform="translate(12 12) scale(0.62) translate(-12 -12)">
+          <path
+            fill="currentColor"
+            fillRule="evenodd"
+            transform="translate(0.5 1)"
+            d="M10 6h9v15H4v-9h3v6h9v-3h-6zM13 9v3h3V9zM10 1h3v3h-3zM16 1h3v3h-3z"
+          />
+        </g>
+      </svg>
       Marqūm
     </span>
   );
@@ -35,7 +45,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
               key={to}
               to={to}
               activeOptions={{ exact: to === "/" }}
-              className="flex h-10 items-center gap-3 rounded-control px-3 text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg data-[status=active]:bg-accent-soft data-[status=active]:text-accent-text"
+              className="flex h-10 items-center gap-3 rounded-control px-3 text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg data-[status=active]:bg-accent-soft data-[status=active]:font-medium data-[status=active]:text-fg"
             >
               <Icon aria-hidden />
               {label}
@@ -54,7 +64,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
               key={to}
               to={to}
               activeOptions={{ exact: to === "/" }}
-              className="flex flex-col items-center justify-center gap-1 text-xs text-fg-muted data-[status=active]:text-accent-text"
+              className="flex flex-col items-center justify-center gap-1 text-xs text-fg-subtle data-[status=active]:font-medium data-[status=active]:text-fg"
             >
               <Icon aria-hidden />
               {label}

@@ -36,6 +36,7 @@ for (const scheme of ["light", "dark"] as const) {
         .first()
         .waitFor({ state: "detached" })
         .catch(() => undefined);
+      await page.mouse.move(1, 1); // no hover tooltips in screenshots
       await page.screenshot({ path: `${SHOTS}/${name}-${scheme}.png`, fullPage: false });
     };
 
@@ -47,17 +48,35 @@ for (const scheme of ["light", "dark"] as const) {
 
     // Home: net position hero in debt mode with the loan line
     const hero = page.getByTestId("hero");
-    await expect(hero).toContainText("In debt");
-    await expect(hero).toContainText(/Owe Mom Rs 60,000 · clear by \w{3} 2027 at Rs 15,000\/month/);
+    await expect(page.getByTestId("debt-line")).toContainText(
+      /In debt · owe Mom Rs 60,000 · clear by \w{3} 2027 at Rs 15,000\/month/,
+    );
+    await expect(hero.locator(".text-neg")).toHaveCount(1); // positive net stays ink; only the debt line is red
     await expect(page.getByTestId("unverified-banner")).toContainText("2 unverified");
     await expect(page.getByTestId("category-card").first()).toBeVisible();
-    await expect(page.getByTestId("sync-dot")).toHaveAttribute("data-status", "synced");
+    await expect(page.getByTestId("sync-state")).toHaveAttribute("data-status", "synced");
+    await expect(page.getByTestId("sync-state").getByRole("button")).toHaveCount(0); // nothing shown when healthy
     await shot("home");
+
+    // Wallet detail: the month as an account, b/f → in → out → closing
+    await page.getByTestId("wallet-nayapay").click();
+    await expect(page.getByTestId("wallet-ledger")).toContainText("Brought forward from Oct 2026");
+    await expect(page.getByTestId("balance-line")).toBeVisible();
+    await expect(page.getByTestId("ledger-row").first()).toContainText("Balance brought forward");
+    await shot("wallet");
+    await page.getByTestId("ledger-row").first().scrollIntoViewIfNeeded();
+    await shot("wallet-ledger");
+    await page.getByRole("button", { name: /Previous month/ }).click();
+    await expect(page.getByTestId("pager-month")).toHaveText("Oct 2026");
+    await page.getByRole("button", { name: "Back" }).click();
 
     // Activity: tag a warm row
     await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Activity" }).click();
     const lunch = page.getByTestId("txn-row").filter({ hasText: "Lunch at Kolachi" });
     await expect(lunch).toHaveAttribute("data-status", "provisional");
+    await expect(page.getByTestId("ledger-row").filter({ hasText: "Balance brought forward" })).toHaveCount(
+      2,
+    );
     await shot("activity");
     await lunch.click();
     await page.getByRole("option", { name: "Food" }).click();
@@ -69,11 +88,16 @@ for (const scheme of ["light", "dark"] as const) {
       .poll(() => world.server.log.some((c) => c.name === "tagTransaction" && c.args.txn_id === "warm-1"))
       .toBe(true);
 
-    // Category detail
-    await page.goto("/#/category/food");
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("on food in November");
+    // Category detail (Screen Time style): month total, days, year, parts, rows
+    await page.goto("/#/category/car?month=2026-10");
+    await expect(page.getByTestId("pager-month")).toHaveText("Oct 2026");
+    await expect(page.getByTestId("category-total")).toContainText("avg Rs");
+    await expect(page.getByTestId("daily-bars")).toBeVisible();
     await expect(page.getByTestId("monthly-bars")).toBeVisible();
+    await expect(page.getByTestId("parts")).toContainText("Petrol");
     await shot("category");
+    await page.getByRole("button", { name: /Next month/ }).click();
+    await expect(page.getByTestId("pager-month")).toHaveText("Nov 2026");
 
     // Import a synthetic statement: warm rows become verified
     await page.goto("/#/import");
@@ -89,14 +113,31 @@ for (const scheme of ["light", "dark"] as const) {
     await page.goto("/#/");
     await expect(page.getByTestId("unverified-banner")).toHaveCount(0);
 
-    // What-if
+    // What-if v2
     const whatIf = page.getByTestId("what-if-card");
     await whatIf.getByLabel("Price").fill("150000");
     await expect(page.getByTestId("what-if-verdict")).toBeVisible();
-    await whatIf.getByRole("button").filter({ hasText: /Rs/ }).click();
-    await expect(page.getByTestId("what-if-sheet")).toBeVisible();
-    await expect(page.getByTestId("waterfall")).toBeVisible();
+    await whatIf
+      .getByRole("button")
+      .filter({ hasText: /Ready|Rs|month/ })
+      .click();
+    const sheet = page.getByTestId("what-if-sheet");
+    await expect(sheet).toBeVisible();
+    await expect(page.getByTestId("projection-chart")).toBeVisible();
     await shot("what-if");
+    await sheet.getByRole("radio", { name: "A loan" }).click();
+    await expect(page.getByTestId("what-if-outcome")).toBeVisible();
+    await page.getByTestId("what-if-outcome").scrollIntoViewIfNeeded();
+    await shot("what-if-loan");
+    await sheet.getByRole("button", { name: /Assumptions/ }).click();
+    await sheet.getByRole("button", { name: "Add a one-off" }).click();
+    await sheet.getByLabel("What").fill("Eid");
+    await expect(sheet.getByRole("button", { name: "Save as my defaults" })).toBeVisible();
+    await shot("what-if-assumptions");
+    await sheet.getByRole("button", { name: "Save as my defaults" }).click();
+    await expect
+      .poll(() => world.server.log.some((c) => c.name === "setSetting" && c.args.key === "forecast"))
+      .toBe(true);
     await page.keyboard.press("Escape");
 
     // Close month (October)
@@ -104,9 +145,23 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(page.getByTestId("checklist")).toBeVisible();
     await shot("close");
 
-    // Plan + settings render
+    // Plan: money split, fixed charges, budgets, goals, loans
     await page.goto("/#/plan");
     await expect(page.getByRole("heading", { level: 1 })).toContainText("a month");
+    await expect(page.getByTestId("allocation")).toContainText("SadaPay");
     await shot("plan");
+    await page.getByRole("button", { name: "Add fixed charge" }).click();
+    await page.getByLabel("Name").fill("Internet");
+    await page.getByRole("dialog").getByLabel("Amount").fill("3500");
+    await page.getByRole("dialog").getByRole("button", { name: "Add fixed charge" }).click();
+    await expect(page.getByTestId("fixed-charges")).toContainText("Internet");
+    await page.getByTestId("budgets").scrollIntoViewIfNeeded();
+    await shot("plan-budgets");
+
+    // Settings: opening balances, test-run line, reset
+    await page.goto("/#/settings");
+    await expect(page.getByText("Test run until 31 Dec 2026 — v1.0 starts 1 Jan 2027")).toBeVisible();
+    await expect(page.getByText(/Opening balance, 1 May 2026/).first()).toBeVisible();
+    await shot("settings");
   });
 }

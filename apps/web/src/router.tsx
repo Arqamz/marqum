@@ -15,6 +15,7 @@ import { HomeScreen } from "./screens/home.tsx";
 import { ImportScreen } from "./screens/import.tsx";
 import { PlanScreen } from "./screens/plan.tsx";
 import { SettingsScreen } from "./screens/settings.tsx";
+import { WalletScreen } from "./screens/wallet.tsx";
 
 const root = createRootRoute({
   component: () => (
@@ -33,11 +34,24 @@ const activity = createRoute({
     return <ActivityScreen search={activity.useSearch()} />;
   },
 });
+const monthSearch = (s: Record<string, unknown>): { month?: string } =>
+  typeof s.month === "string" && /^\d{4}-\d{2}$/.test(s.month) ? { month: s.month } : {};
+
 const category = createRoute({
   getParentRoute: () => root,
   path: "/category/$id",
+  validateSearch: monthSearch,
   component: function Category() {
-    return <CategoryScreen id={category.useParams().id} />;
+    return <CategoryScreen id={category.useParams().id} month={category.useSearch().month} />;
+  },
+});
+const wallet = createRoute({
+  getParentRoute: () => root,
+  path: "/wallet/$id",
+  validateSearch: monthSearch,
+  component: function Wallet() {
+    const id = wallet.useParams().id;
+    return <WalletScreen id={id === "sadapay" ? "sadapay" : "nayapay"} month={wallet.useSearch().month} />;
   },
 });
 const counterparty = createRoute({
@@ -51,8 +65,7 @@ const plan = createRoute({ getParentRoute: () => root, path: "/plan", component:
 const close = createRoute({
   getParentRoute: () => root,
   path: "/close",
-  validateSearch: (s: Record<string, unknown>): { month?: string } =>
-    typeof s.month === "string" && /^\d{4}-\d{2}$/.test(s.month) ? { month: s.month } : {},
+  validateSearch: monthSearch,
   component: function Close() {
     const { month } = close.useSearch();
     return <CloseScreen {...(month ? { month } : {})} />;
@@ -61,7 +74,17 @@ const close = createRoute({
 const settings = createRoute({ getParentRoute: () => root, path: "/settings", component: SettingsScreen });
 const importRoute = createRoute({ getParentRoute: () => root, path: "/import", component: ImportScreen });
 
-const tree = root.addChildren([home, activity, category, counterparty, plan, close, settings, importRoute]);
+const tree = root.addChildren([
+  home,
+  activity,
+  category,
+  wallet,
+  counterparty,
+  plan,
+  close,
+  settings,
+  importRoute,
+]);
 
 export function makeRouter() {
   return createRouter({

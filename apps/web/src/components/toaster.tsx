@@ -39,7 +39,7 @@ export function Toaster() {
                 {t.action ? (
                   <button
                     type="button"
-                    className="self-start text-sm font-medium text-accent-text"
+                    className="self-start text-sm font-medium text-fg underline underline-offset-4"
                     onClick={() => {
                       t.action?.run();
                       dismissToast(t.id);

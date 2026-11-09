@@ -1,4 +1,12 @@
-import { addMonths, type Dataset, formatRs, isClosed, monthLabel, monthOf } from "@marqum/core";
+import {
+  availableMonths,
+  type Dataset,
+  formatRs,
+  isClosed,
+  monthLabel,
+  monthLedger,
+  monthOf,
+} from "@marqum/core";
 import type { Transaction } from "@marqum/schema";
 import { useNavigate } from "@tanstack/react-router";
 import { Plus, Search, X } from "lucide-react";
@@ -14,6 +22,7 @@ import { enqueue } from "../lib/commands.ts";
 import { monthName } from "../lib/months.ts";
 import type { ActivitySearch } from "../lib/search.ts";
 import { categoryPath, lookup, needsTag, txnTitle } from "../lib/view.ts";
+import { carryRows } from "./wallet.tsx";
 
 export function ActivityScreen({ search }: { search: ActivitySearch }) {
   const ds = useDataset();
@@ -75,31 +84,33 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
     void navigate({ to: "/activity", search: (prev: ActivitySearch) => clean({ ...prev, ...patch }) });
 
   const l = useMemo(() => lookup(ds), [ds]);
-  const rows = useMemo(
-    () => ds.transactions.filter((t) => matches(t, search, ds, month)),
-    [ds, search, month],
-  );
+  const rows = useMemo(() => {
+    const list = ds.transactions.filter((t) => matches(t, search, ds, month));
+    // A plain month view opens each wallet with its brought-forward line (virtual while the month is open).
+    if (month && !search.filter && !search.q && !search.cp && !search.category) {
+      const have = new Set(list.map((t) => t.id));
+      for (const a of ds.accounts) {
+        if (search.wallet && search.wallet !== a.id) continue;
+        const led = monthLedger(ds, a.id, month, now);
+        for (const t of carryRows(ds, a.id, month, led.brought_forward, led.brought_forward_virtual))
+          if (!have.has(t.id)) list.push(t);
+      }
+    }
+    return list;
+  }, [ds, search, month, now]);
   const spent = rows.reduce((s, t) => s + (t.flow === "spend" || t.flow === "fee" ? -t.amount : 0), 0);
   const untagged = rows.filter(needsTag).length;
   const disputed = rows.filter((t) => t.status === "disputed");
-  const months = useMemo(() => {
-    let first = now;
-    for (const t of ds.transactions) if (t.occurred_at < first) first = t.occurred_at;
-    first = first.slice(0, 7);
-    const list: string[] = [];
-    for (let m = current; m >= first && list.length < 24; m = addMonths(m, -1)) list.push(m);
-    return list;
-  }, [ds, now, current]);
+  const months = useMemo(() => [...availableMonths(ds, now)].reverse(), [ds, now]);
   const txn = open ? (ds.transactions.find((t) => t.id === open) ?? null) : null;
   const cpName = search.cp ? l.counterparty.get(search.cp)?.name : undefined;
   const catName = search.category ? categoryPath(search.category, l) : null;
 
-  const headline =
-    rows.length === 0
-      ? "Nothing here yet"
-      : `${formatRs(spent)} spent${month ? ` in ${month === current ? monthName(month) : monthLabel(month)}` : ""}${
-          untagged > 0 ? ` · ${untagged} untagged` : ""
-        }`;
+  const headline = rows.every((t) => t.flow === "carry")
+    ? "Nothing here yet"
+    : `${formatRs(spent)} spent${month ? ` in ${month === current ? monthName(month) : monthLabel(month)}` : ""}${
+        untagged > 0 ? ` · ${untagged} untagged` : ""
+      }`;
 
   return (
     <>

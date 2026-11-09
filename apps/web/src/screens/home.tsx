@@ -5,6 +5,7 @@ import {
   formatRs,
   goalStatus,
   monthLabel,
+  monthLedger,
   monthOf,
   netPosition,
   unverifiedSummary,
@@ -76,13 +77,13 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
     const open = np.loans.filter((l) => l.outstanding > 0);
     if (open.length === 1 && open[0]) {
       const l = open[0];
-      return `Owe ${l.loan.lender} ${formatRs(l.outstanding)}${
+      return `owe ${l.loan.lender} ${formatRs(l.outstanding)}${
         l.payoff_month
           ? ` · clear by ${monthLabel(l.payoff_month)} at ${formatRs(l.loan.installment)}/month`
           : ""
       }`;
     }
-    return `Owe ${formatRs(np.debt)} across ${open.length} loans${np.debt_free_month ? ` · clear by ${monthLabel(np.debt_free_month)}` : ""}`;
+    return `owe ${formatRs(np.debt)} across ${open.length} loans${np.debt_free_month ? ` · clear by ${monthLabel(np.debt_free_month)}` : ""}`;
   }, [np]);
 
   const verifiedTo = np.wallets
@@ -93,46 +94,59 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
   return (
     <>
       <section className="flex flex-col items-center gap-2 pt-6 pb-2 text-center" data-testid="hero">
-        <span className={cn("text-sm font-medium", np.in_debt ? "text-neg" : "text-fg-muted")}>
-          {np.in_debt ? "In debt" : "Net position"}
-        </span>
+        <span className="text-sm font-medium text-fg-muted">Net position</span>
         <HeroAmount
           value={np.net}
-          className={cn(
-            "text-hero font-medium transition-colors",
-            np.in_debt || np.net < 0 ? "text-neg" : np.net > 0 ? "text-pos" : "text-fg",
-          )}
+          className={cn("text-hero font-medium transition-colors", np.net < 0 ? "text-neg" : "text-fg")}
         />
-        <p className="max-w-xs text-sm text-balance text-fg-muted">
-          {debtLine ??
-            `Across SadaPay and NayaPay${verifiedTo ? ` · verified to ${dayLabel(verifiedTo)}` : ""}`}
-        </p>
+        {debtLine ? (
+          <p
+            className="mt-1 max-w-sm rounded-card bg-neg-soft px-4 py-2 text-sm text-balance text-neg"
+            data-testid="debt-line"
+          >
+            <span className="font-medium">In debt</span> · {debtLine}
+          </p>
+        ) : (
+          <p className="max-w-xs text-sm text-balance text-fg-muted">
+            Across SadaPay and NayaPay{verifiedTo ? ` · verified to ${dayLabel(verifiedTo)}` : ""}
+          </p>
+        )}
       </section>
 
-      <section className="grid grid-cols-2 gap-4" aria-label="Wallets">
+      <section className="grid grid-cols-2 gap-3" aria-label="Wallets">
         {np.wallets.map((w) => {
           const below = w.floor !== null && w.balance < w.floor;
+          const ledger = monthLedger(ds, w.account_id, month, now);
           return (
-            <div key={w.account_id} className="flex flex-col gap-1" data-testid={`wallet-${w.account_id}`}>
+            <Link
+              key={w.account_id}
+              to="/wallet/$id"
+              params={{ id: w.account_id }}
+              className="flex flex-col gap-2 rounded-card bg-surface p-4 transition-colors hover:bg-surface-2"
+              data-testid={`wallet-${w.account_id}`}
+            >
               <span className="text-sm text-fg-muted">{w.name}</span>
               <TweenMoney value={w.balance} className="text-xl font-medium" />
-              <span className="flex flex-col text-sm text-fg-muted">
+              <span className="flex flex-col gap-1 text-sm text-fg-muted">
+                <span className="num">{formatRs(ledger.inflow, { sign: ledger.inflow > 0 })} in</span>
+                <span className="num">{formatRs(-ledger.outflow)} out</span>
                 {w.role === "vault" && setAside > 0 ? (
                   <span className="num">{formatRs(setAside)} set aside</span>
                 ) : null}
                 {below && w.floor !== null ? (
                   <span className="num text-warn">{formatRs(w.floor - w.balance)} below floor</span>
                 ) : null}
-                <span>
-                  {w.verified_until ? `verified to ${dayLabel(w.verified_until)}` : "no statement yet"}
-                </span>
                 {w.provisional_delta !== 0 ? (
                   <span className="num text-warn">
                     {formatRs(w.provisional_delta, { sign: true })} unverified
                   </span>
-                ) : null}
+                ) : (
+                  <span>
+                    {w.verified_until ? `verified to ${dayLabel(w.verified_until)}` : "no statement yet"}
+                  </span>
+                )}
               </span>
-            </div>
+            </Link>
           );
         })}
       </section>
@@ -181,6 +195,7 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
             key={c.category.id}
             to="/category/$id"
             params={{ id: c.category.id }}
+            search={{ month }}
             className="flex flex-col gap-3 rounded-card bg-surface p-4 transition-colors hover:bg-surface-2"
             data-testid="category-card"
           >

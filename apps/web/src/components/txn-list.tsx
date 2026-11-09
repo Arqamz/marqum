@@ -1,6 +1,6 @@
 import { formatRs } from "@marqum/core";
 import type { Transaction } from "@marqum/schema";
-import { Lock, TriangleAlert } from "lucide-react";
+import { CornerDownRight, CornerUpRight, Lock, TriangleAlert } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useMemo } from "react";
 import { cn } from "../lib/cn.ts";
@@ -9,7 +9,47 @@ import { CategoryIcon } from "./category-icon.tsx";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
+/**
+ * Bookkeeping rows (flow "carry"): every month opens with "Balance brought forward" and, once closed, ends with
+ * "Balance carried forward", so each month runs from 0 to 0. Muted, not spending, not taggable.
+ */
+export function LedgerRow({ t, l }: { t: Transaction; l: Lookup }) {
+  const forward = t.amount >= 0 && !/carried/i.test(t.description);
+  const Icon = forward ? CornerDownRight : CornerUpRight;
+  const wallet = l.account.get(t.account_id) ?? t.account_id;
+  const m = /(?:brought|carried) forward\s+(from|to)\s+(.+)$/i.exec(t.description);
+  const title = forward ? "Balance brought forward" : "Balance carried forward";
+  const where = m ? `${m[1]?.toLowerCase()} ${m[2]}` : null;
+  return (
+    <li className="flex list-none items-center gap-3 px-3 py-3 text-fg-muted" data-testid="ledger-row">
+      <span className="grid size-10 shrink-0 place-items-center">
+        <Icon aria-hidden />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="truncate">{title}</span>
+        <span className="truncate text-sm">{[where, wallet].filter(Boolean).join(" · ")}</span>
+      </span>
+      <span className="num shrink-0 text-right">{formatRs(t.amount, { sign: t.amount > 0 })}</span>
+    </li>
+  );
+}
+
 export function TxnRow({
+  t,
+  l,
+  onOpen,
+  closed,
+}: {
+  t: Transaction;
+  l: Lookup;
+  onOpen: (t: Transaction) => void;
+  closed?: boolean | undefined;
+}) {
+  if (t.flow === "carry") return <LedgerRow t={t} l={l} />;
+  return <EntryRow t={t} l={l} onOpen={onOpen} closed={closed} />;
+}
+
+function EntryRow({
   t,
   l,
   onOpen,
@@ -163,4 +203,38 @@ export function TxnList({
       })}
     </div>
   );
+}
+
+/** A brought-forward row that isn't stored yet (open month): shown from monthLedger's virtual b/f. */
+export function virtualBroughtForward(
+  account_id: Transaction["account_id"],
+  month: string,
+  amount: number,
+  fromLabel: string,
+): Transaction {
+  return {
+    id: `virtual-bf-${account_id}-${month}`,
+    account_id,
+    occurred_at: `${month}-01T00:00`,
+    amount,
+    status: "verified",
+    source: "system",
+    flow: "carry",
+    description: `Balance brought forward from ${fromLabel}`,
+    bank_type: null,
+    reason: null,
+    counterparty_id: null,
+    category_id: null,
+    external_id: null,
+    statement_id: null,
+    loan_id: null,
+    linked_txn_id: null,
+    fee: 0,
+    balance_after: null,
+    notification_id: null,
+    created_at: `${month}-01T00:00`,
+    updated_at: `${month}-01T00:00`,
+    version: 0,
+    deleted: false,
+  };
 }

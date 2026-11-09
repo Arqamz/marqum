@@ -1,4 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Marqūm">
   <!-- square-Kufic qāf (ق): the sealed ledger block; its two dots are the two wallets -->
-  <path fill="#4F46E5" fill-rule="evenodd" transform="translate(0.5 1)" d="M10 6h9v15H4v-9h3v6h9v-3h-6zM13 9v3h3V9zM10 1h3v3h-3zM16 1h3v3h-3z"/>
+  <path fill="#16181D" fill-rule="evenodd" transform="translate(0.5 1)" d="M10 6h9v15H4v-9h3v6h9v-3h-6zM13 9v3h3V9zM10 1h3v3h-3zM16 1h3v3h-3z"/>
 </svg>

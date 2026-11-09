@@ -153,6 +153,13 @@ async function pull(): Promise<void> {
   for (let page = 0; page < 1000; page++) {
     const since = await getMeta<number>("version", 0);
     const res = await api<PullResponse>(`${API.pull}?since=${since}`);
+    const stored = await getMeta<string | null>("epoch", null);
+    if (res.epoch && stored !== null && stored !== res.epoch) {
+      // The ledger was reset on the server: this replica belongs to the old epoch. Start over from 0.
+      await wipeForEpoch(res.epoch);
+      toast({ tone: "neutral", title: "Ledger was reset — reloaded" });
+      continue;
+    }
     const tables = TABLE_NAMES.filter((t) => (res.changes[t]?.length ?? 0) > 0);
     await db.transaction("rw", [db.meta, db.outbox, ...tables.map((t) => db.table(t))], async () => {
       for (const t of tables) {
@@ -160,11 +167,21 @@ async function pull(): Promise<void> {
         await db.table(t as TableName).bulkPut(rows);
       }
       await setMeta("version", res.version);
+      if (res.epoch) await setMeta("epoch", res.epoch);
       // Server state now includes the acknowledged commands, so their optimistic preview can go.
       if (!res.more) await db.outbox.filter((e) => e.acked === true).delete();
     });
     if (!res.more) return;
   }
+}
+
+/** Drop every replicated row, the outbox and the imported-file memory; keep only the new epoch. */
+async function wipeForEpoch(epoch: string): Promise<void> {
+  await db.transaction("rw", db.tables, async () => {
+    for (const t of db.tables) await t.clear();
+    await setMeta("epoch", epoch);
+    await setMeta("version", 0);
+  });
 }
 
 /** For tests and logout. */

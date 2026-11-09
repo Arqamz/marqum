@@ -89,4 +89,27 @@ describe("sync engine", () => {
     expect(pushed.name).toBe("tagTransaction");
     expect(server.dataset().transactions.find((t) => t.id === old.id)?.reason).toBe("Birthday dinner");
   });
+
+  it("drops the replica and reloads when the ledger epoch changes", async () => {
+    const server = await signedIn();
+    await syncNow();
+    expect((await loadDataset()).dataset.transactions.length).toBeGreaterThan(0);
+    await db.intake.put({
+      sha256: "abc",
+      name: "m-10-2026.csv",
+      status: "imported",
+      statement: null,
+      failed: [],
+      error: null,
+      seen_at: 1,
+      base64: null,
+    });
+    server.resetElsewhere();
+    await syncNow();
+    const { dataset } = await loadDataset();
+    expect(dataset.transactions).toHaveLength(0);
+    expect(await db.intake.count()).toBe(0);
+    expect(toasts.get().at(-1)?.title).toBe("Ledger was reset — reloaded");
+    expect(dataset.loans[0]?.lender).toBe("Mom"); // configuration survives
+  });
 });

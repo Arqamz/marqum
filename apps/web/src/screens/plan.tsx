@@ -1,4 +1,5 @@
 import {
+  allocation,
   budgetModel,
   type Dataset,
   detectRecurring,
@@ -8,17 +9,18 @@ import {
   loanStatus,
   monthLabel,
   parseRs,
+  type RecurringCandidate,
   setting,
-  suggestedSplit,
 } from "@marqum/core";
-import type { AccountId, Goal, Loan } from "@marqum/schema";
-import { useMemo, useState } from "react";
+import type { AccountId, Category, Goal, Loan, Recurring } from "@marqum/schema";
+import { ChevronRight, Plus } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { CategoryIcon } from "../components/category-icon.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { Money } from "../components/money.tsx";
 import { Headline, Screen, Section } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
-import { Segmented, Skeleton } from "../components/ui/controls.tsx";
+import { Segmented, Skeleton, Slider } from "../components/ui/controls.tsx";
 import { Field, Input, MoneyInput } from "../components/ui/input.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
 import { cn } from "../lib/cn.ts";
@@ -45,7 +47,7 @@ export function PlanScreen() {
 function Progress({ value, tone = "fg" }: { value: number; tone?: "fg" | "pos" | "neg" }) {
   return (
     <div
-      className="h-1 rounded-full bg-surface-2"
+      className="h-1.5 rounded-full bg-surface-2"
       role="progressbar"
       aria-valuenow={Math.round(value * 100)}
       aria-valuemin={0}
@@ -53,8 +55,8 @@ function Progress({ value, tone = "fg" }: { value: number; tone?: "fg" | "pos" |
     >
       <div
         className={cn(
-          "h-1 rounded-full",
-          tone === "pos" ? "bg-pos" : tone === "neg" ? "bg-neg" : "bg-fg-muted",
+          "h-1.5 rounded-full",
+          tone === "pos" ? "bg-pos" : tone === "neg" ? "bg-neg" : "bg-[var(--chart-bar-current)]",
         )}
         style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }}
       />
@@ -66,19 +68,31 @@ type Edit =
   | { kind: "income" }
   | { kind: "loan"; loan?: Loan }
   | { kind: "goal"; goal?: Goal }
-  | { kind: "move"; goal: Goal };
+  | { kind: "move"; goal: Goal }
+  | { kind: "fixed"; recurring?: Recurring; candidate?: RecurringCandidate }
+  | { kind: "budget"; category: Category; average: number | null };
+
+const WALLET: Record<AccountId, string> = { sadapay: "SadaPay", nayapay: "NayaPay" };
+const card = "flex flex-col gap-4 rounded-card bg-surface p-4";
 
 function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
   const model = useMemo(() => budgetModel(ds, now), [ds, now]);
-  const split = useMemo(() => suggestedSplit(ds, now), [ds, now]);
   const loans = useMemo(() => loanStatus(ds, now), [ds, now]);
   const goals = useMemo(() => goalStatus(ds, now), [ds, now]);
+  const fixed = useMemo(
+    () => ds.recurring.filter((r) => r.active).sort((a, b) => a.day_of_month - b.day_of_month),
+    [ds],
+  );
   const candidates = useMemo(() => {
     const tracked = new Set(ds.recurring.map((r) => r.counterparty_id).filter(Boolean));
     return detectRecurring(ds).filter((c) => !c.counterparty_id || !tracked.has(c.counterparty_id));
   }, [ds]);
   const [edit, setEdit] = useState<Edit | null>(null);
-  const recurring = ds.recurring.filter((r) => r.active);
+  const fixedTotal = fixed.reduce((sum, r) => sum + r.amount, 0);
+  const tops = ds.categories
+    .filter((c) => c.parent_id === null && (!c.hidden || c.budget))
+    .sort((a, b) => a.sort - b.sort);
+  const planned = new Map(model.categories.map((c) => [c.category_id, c]));
 
   return (
     <>
@@ -86,86 +100,110 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
         sub={`${formatRs(model.income)} in · ${formatRs(model.committed)} committed · ${formatRs(model.variable)} usual spending · ${formatRs(model.goal_contributions)} to goals`}
       >
         {model.surplus >= 0
-          ? `${formatRs(model.surplus)} a month left after the usual`
-          : `${formatRs(-model.surplus)} a month short of the usual`}
+          ? `${formatRs(model.surplus)} a month to spare`
+          : `${formatRs(-model.surplus)} a month short`}
       </Headline>
 
-      <Section
-        title="Split each month"
-        aside={
-          <Button variant="text" size="sm" onClick={() => setEdit({ kind: "income" })}>
-            Income {formatRs(model.income)}
-          </Button>
-        }
-      >
-        <div className="grid grid-cols-2 gap-4">
-          {(["sadapay", "nayapay"] as AccountId[]).map((a) => (
-            <div key={a} className="flex flex-col gap-1">
-              <span className="text-sm text-fg-muted">{a === "sadapay" ? "SadaPay" : "NayaPay"}</span>
-              <Money value={split[a]} className="text-xl font-medium" />
-            </div>
-          ))}
-        </div>
-        <ul className="flex flex-col gap-1 text-sm">
-          {split.lines.map((line) => (
-            <li key={`${line.account_id}-${line.label}`} className="flex justify-between gap-4">
-              <span className="text-fg-muted">
-                {line.account_id === "sadapay" ? "SadaPay" : "NayaPay"} · {line.label}
-              </span>
-              <Money value={line.amount} />
-            </li>
-          ))}
-        </ul>
-      </Section>
+      <MoneySection ds={ds} now={now} onEditIncome={() => setEdit({ kind: "income" })} />
 
       <Section
-        title={loans.some((x) => x.outstanding > 0) ? "Loans" : "Loans"}
-        aside={
-          <Button variant="text" size="sm" onClick={() => setEdit({ kind: "loan" })}>
-            New loan
-          </Button>
-        }
+        title="Fixed charges"
+        aside={<span className="num text-sm text-fg-muted">{formatRs(fixedTotal)} a month</span>}
       >
-        {loans.length === 0 ? (
-          <p className="text-sm text-fg-muted">
-            No loans. Big purchase coming? Record a loan from Mom and repay it monthly.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-4">
-            {loans.map((x) => (
-              <li key={x.loan.id}>
+        <div className={card}>
+          {fixed.length === 0 ? (
+            <p className="text-sm text-fg-muted">
+              Bills, subscriptions and anything else that leaves every month. Add them so the plan knows.
+            </p>
+          ) : (
+            <ul className="-mx-2 flex flex-col" data-testid="fixed-charges">
+              {fixed.map((r) => (
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => setEdit({ kind: "fixed", recurring: r })}
+                    className="flex w-full items-center gap-3 rounded-inner px-2 py-2 text-left hover:bg-surface-2"
+                  >
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate">{r.name}</span>
+                      <span className="text-sm text-fg-muted">
+                        {WALLET[r.account_id]} · day {r.day_of_month}
+                      </span>
+                    </span>
+                    <Money value={r.amount} className="font-medium" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <Button variant="secondary" className="self-start" onClick={() => setEdit({ kind: "fixed" })}>
+            <Plus aria-hidden />
+            Add fixed charge
+          </Button>
+        </div>
+        {candidates.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            <span className="text-sm text-fg-muted">Looks recurring — add?</span>
+            <ul className="flex flex-col gap-1">
+              {candidates.map((c) => (
+                <li key={c.key} className="flex items-baseline justify-between gap-3 text-sm">
+                  <span className="min-w-0">
+                    {c.name}
+                    <span className="text-fg-muted">
+                      {" "}
+                      · {c.occurrences}× · around day {c.day_of_month}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <Money value={c.amount} />
+                    <Button variant="text" size="sm" onClick={() => setEdit({ kind: "fixed", candidate: c })}>
+                      Add
+                    </Button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </Section>
+
+      <Section title="Monthly budgets">
+        <p className="-mt-1 text-sm text-fg-muted">
+          Used for planning while a category has little history. Leave empty to use the average.
+        </p>
+        <ul className={cn(card, "gap-0 px-2 py-2")} data-testid="budgets">
+          {tops.map((c) => {
+            const pc = planned.get(c.id);
+            const avg = pc?.source === "average" && pc.planned > 0 ? pc.planned : null;
+            return (
+              <li key={c.id}>
                 <button
                   type="button"
-                  className="flex w-full flex-col gap-2 text-left"
-                  onClick={() => setEdit({ kind: "loan", loan: x.loan })}
+                  onClick={() => setEdit({ kind: "budget", category: c, average: avg })}
+                  className="flex w-full items-center gap-3 rounded-inner px-2 py-2 text-left hover:bg-surface-2"
                 >
-                  <span className="flex items-baseline justify-between gap-4">
-                    <span className="font-medium">
-                      {x.loan.lender} · {x.loan.purpose}
+                  <CategoryIcon name={c.icon} className="shrink-0 text-fg-muted" />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate">{c.name}</span>
+                    <span className="num text-sm text-fg-muted">
+                      {pc?.source === "recurring"
+                        ? "covered by fixed charges"
+                        : avg !== null
+                          ? `avg ${formatRs(avg)}`
+                          : "no history yet"}
                     </span>
-                    <Money
-                      value={x.outstanding}
-                      tone={x.outstanding > 0 ? "neg" : "pos"}
-                      className="font-medium"
-                    />
                   </span>
-                  <Progress value={x.progress} tone={x.outstanding > 0 ? "fg" : "pos"} />
-                  <span className="num text-sm text-fg-muted">
-                    {formatRs(x.repaid)} of {formatRs(x.loan.principal)} repaid
-                    {x.outstanding > 0 && x.payoff_month
-                      ? ` · ${formatRs(x.loan.installment)}/month · clear by ${monthLabel(x.payoff_month)}`
-                      : x.outstanding <= 0
-                        ? " · cleared"
-                        : ""}
-                  </span>
+                  {c.budget ? (
+                    <Money value={c.budget} className="font-medium" />
+                  ) : (
+                    <span className="text-sm text-fg-muted">Set</span>
+                  )}
+                  <ChevronRight className="shrink-0 text-fg-subtle" aria-hidden />
                 </button>
               </li>
-            ))}
-          </ul>
-        )}
-        <p className="text-sm text-fg-muted">
-          Link repayments by tagging a transfer as “Loan repayment” in Activity.
-        </p>
+            );
+          })}
+        </ul>
       </Section>
 
       <Section
@@ -181,122 +219,165 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
             No goals yet. A goal sets money aside inside SadaPay each month.
           </p>
         ) : (
-          <ul className="flex flex-col gap-4">
-            {goals.map((g) => (
-              <li key={g.goal.id} className="flex flex-col gap-2">
-                <div className="flex items-center gap-3">
-                  <CategoryIcon name={g.goal.icon} className="text-fg-muted" />
-                  <button
-                    type="button"
-                    className="flex-1 text-left font-medium"
-                    onClick={() => setEdit({ kind: "goal", goal: g.goal })}
-                  >
-                    {g.goal.name}
-                  </button>
-                  <span className="num text-sm">
-                    {formatRs(g.saved)} <span className="text-fg-muted">/ {formatRs(g.goal.target)}</span>
-                  </span>
-                </div>
-                <Progress value={g.progress} tone={g.progress >= 1 ? "pos" : "fg"} />
-                <div className="flex items-baseline justify-between text-sm">
-                  <span className="num text-fg-muted">
-                    {g.progress >= 1
-                      ? "Reached"
-                      : `${formatRs(g.goal.monthly)}/month${g.eta_month ? ` · ready ${monthLabel(g.eta_month)}` : " · no ETA at this rate"}`}
-                  </span>
-                  <Button variant="text" size="sm" onClick={() => setEdit({ kind: "move", goal: g.goal })}>
-                    Move money
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
+          goals.map((g) => (
+            <div key={g.goal.id} className={card}>
+              <button
+                type="button"
+                className="flex items-center gap-3 text-left"
+                onClick={() => setEdit({ kind: "goal", goal: g.goal })}
+              >
+                <CategoryIcon name={g.goal.icon} className="text-fg-muted" />
+                <span className="flex-1 font-medium">{g.goal.name}</span>
+                <span className="num text-sm">
+                  {formatRs(g.saved)} <span className="text-fg-muted">of {formatRs(g.goal.target)}</span>
+                </span>
+              </button>
+              <Progress value={g.progress} tone={g.progress >= 1 ? "pos" : "fg"} />
+              <div className="flex items-baseline justify-between gap-4 text-sm">
+                <span className="num text-fg-muted">
+                  {g.progress >= 1
+                    ? "Reached"
+                    : `${formatRs(g.goal.monthly)}/month${g.eta_month ? ` · ready ${monthLabel(g.eta_month)}` : " · no date at this rate"}`}
+                </span>
+                <Button variant="text" size="sm" onClick={() => setEdit({ kind: "move", goal: g.goal })}>
+                  Move money
+                </Button>
+              </div>
+            </div>
+          ))
         )}
       </Section>
 
-      <Section title="Recurring">
-        {recurring.length === 0 && candidates.length === 0 ? (
+      <Section
+        title="Loans"
+        aside={
+          <Button variant="text" size="sm" onClick={() => setEdit({ kind: "loan" })}>
+            New loan
+          </Button>
+        }
+      >
+        {loans.length === 0 ? (
           <p className="text-sm text-fg-muted">
-            Nothing recurring yet. Payments to the same person for a similar amount every month show up here.
+            No loans. Big purchase coming? Record a loan and repay it monthly.
           </p>
-        ) : null}
-        <ul className="flex flex-col gap-2">
-          {recurring.map((r) => (
-            <li key={r.id} className="flex items-baseline justify-between gap-4 text-sm">
-              <span>
-                {r.name}
-                <span className="text-fg-muted">
-                  {" "}
-                  · {r.account_id === "sadapay" ? "SadaPay" : "NayaPay"} · day {r.day_of_month}
+        ) : (
+          loans.map((x) => (
+            <button
+              key={x.loan.id}
+              type="button"
+              className={cn(card, "text-left")}
+              onClick={() => setEdit({ kind: "loan", loan: x.loan })}
+            >
+              <span className="flex items-baseline justify-between gap-4">
+                <span className="font-medium">
+                  {x.loan.lender} · {x.loan.purpose}
                 </span>
+                <Money
+                  value={x.outstanding}
+                  tone={x.outstanding > 0 ? "neg" : "pos"}
+                  className="font-medium"
+                />
               </span>
-              <span className="flex items-baseline gap-3">
-                <Money value={r.amount} />
-                <Button
-                  variant="text"
-                  size="sm"
-                  onClick={() =>
-                    void enqueue("upsertRecurring", {
-                      recurring_id: r.id,
-                      name: r.name,
-                      account_id: r.account_id,
-                      category_id: r.category_id,
-                      counterparty_id: r.counterparty_id,
-                      amount: r.amount,
-                      day_of_month: r.day_of_month,
-                      active: false,
-                    })
-                  }
-                >
-                  Stop
-                </Button>
+              <Progress value={x.progress} tone={x.outstanding > 0 ? "fg" : "pos"} />
+              <span className="num text-sm text-fg-muted">
+                {formatRs(x.repaid)} of {formatRs(x.loan.principal)} repaid
+                {x.outstanding > 0 && x.payoff_month
+                  ? ` · ${formatRs(x.loan.installment)}/month · clear by ${monthLabel(x.payoff_month)}`
+                  : x.outstanding <= 0
+                    ? " · cleared"
+                    : ""}
               </span>
-            </li>
-          ))}
-        </ul>
-        {candidates.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            <span className="text-sm text-fg-muted">Looks recurring</span>
-            <ul className="flex flex-col gap-2">
-              {candidates.map((c) => (
-                <li key={c.key} className="flex items-baseline justify-between gap-4 text-sm">
-                  <span>
-                    {c.name}
-                    <span className="text-fg-muted">
-                      {" "}
-                      · {c.occurrences}× · around day {c.day_of_month}
-                    </span>
-                  </span>
-                  <span className="flex items-baseline gap-3">
-                    <Money value={c.amount} />
-                    <Button
-                      variant="text"
-                      size="sm"
-                      onClick={() =>
-                        void enqueue("upsertRecurring", {
-                          recurring_id: newId(),
-                          name: c.name,
-                          account_id: c.account_id,
-                          category_id: c.category_id,
-                          counterparty_id: c.counterparty_id,
-                          amount: c.amount,
-                          day_of_month: c.day_of_month,
-                          active: true,
-                        })
-                      }
-                    >
-                      Track
-                    </Button>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
+            </button>
+          ))
+        )}
+        <p className="text-sm text-fg-muted">
+          Tag a transfer as “Loan repayment” in Activity to count it here.
+        </p>
       </Section>
 
       <PlanSheets ds={ds} edit={edit} onClose={() => setEdit(null)} />
     </>
+  );
+}
+
+/** Income and the one control that splits it between the two wallets. */
+function MoneySection({ ds, now, onEditIncome }: { ds: Dataset; now: string; onEditIncome: () => void }) {
+  const alloc = useMemo(() => allocation(ds, now), [ds, now]);
+  const [sada, setSada] = useState(alloc.sadapay);
+  useEffect(() => setSada(alloc.sadapay), [alloc.sadapay]);
+  const naya = Math.max(0, alloc.income - sada);
+  const dirty = sada !== alloc.sadapay;
+  const step = 50_000; // Rs 500
+  const suggested = alloc.suggested;
+  return (
+    <Section
+      title="This month's money"
+      aside={
+        <Button variant="text" size="sm" onClick={onEditIncome}>
+          Income {formatRs(alloc.income)}
+        </Button>
+      }
+    >
+      <div className={card} data-testid="allocation">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="flex flex-col gap-1">
+            <span className="text-sm text-fg-muted">SadaPay</span>
+            <Money value={sada} className="text-xl font-medium" />
+          </div>
+          <div className="flex flex-col gap-1 text-right">
+            <span className="text-sm text-fg-muted">NayaPay</span>
+            <Money value={naya} className="text-xl font-medium" />
+          </div>
+        </div>
+        <Slider
+          label="SadaPay share"
+          value={sada}
+          onValueChange={(v) => setSada(Math.round(v / step) * step)}
+          min={0}
+          max={alloc.income}
+          step={step}
+        />
+        <div className="flex flex-col gap-1 text-sm">
+          <span className="flex justify-between gap-4">
+            <span>Suggested for SadaPay{alloc.source === "user" ? "" : " (in use)"}</span>
+            <Money value={suggested.sadapay} className="font-medium" />
+          </span>
+          <ul className="flex flex-col gap-1">
+            {suggested.lines
+              .filter((l) => l.account_id === "sadapay")
+              .map((l) => (
+                <li key={l.label} className="flex justify-between gap-4 text-fg-muted">
+                  <span>{l.label}</span>
+                  <Money value={l.amount} />
+                </li>
+              ))}
+          </ul>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {dirty ? (
+            <Button
+              variant="primary"
+              onClick={() => void enqueue("setSetting", { key: "allocation_sadapay", value: String(sada) })}
+            >
+              Save split
+            </Button>
+          ) : null}
+          {sada !== suggested.sadapay ? (
+            <Button variant="ghost" onClick={() => setSada(suggested.sadapay)}>
+              Use suggestion
+            </Button>
+          ) : null}
+          {alloc.source === "user" && !dirty ? (
+            <Button
+              variant="ghost"
+              onClick={() => void enqueue("setSetting", { key: "allocation_sadapay", value: "" })}
+            >
+              Follow the suggestion automatically
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </Section>
   );
 }
 
@@ -312,14 +393,167 @@ function PlanSheets({ ds, edit, onClose }: { ds: Dataset; edit: Edit | null; onC
           ? (edit.goal?.name ?? "New goal")
           : edit?.kind === "move"
             ? `Move money for ${edit.goal.name}`
-            : "";
+            : edit?.kind === "fixed"
+              ? (edit.recurring?.name ?? "Add a fixed charge")
+              : edit?.kind === "budget"
+                ? `${edit.category.name} budget`
+                : "";
   return (
     <Sheet open={edit !== null} onOpenChange={(o) => !o && onClose()} title={title}>
       {edit?.kind === "income" ? <IncomeForm ds={ds} onDone={onClose} /> : null}
       {edit?.kind === "loan" ? <LoanForm loan={edit.loan} onDone={onClose} /> : null}
       {edit?.kind === "goal" ? <GoalForm goal={edit.goal} count={ds.goals.length} onDone={onClose} /> : null}
       {edit?.kind === "move" ? <MoveForm goal={edit.goal} onDone={onClose} /> : null}
+      {edit?.kind === "fixed" ? (
+        <FixedForm ds={ds} recurring={edit.recurring} candidate={edit.candidate} onDone={onClose} />
+      ) : null}
+      {edit?.kind === "budget" ? (
+        <BudgetForm category={edit.category} average={edit.average} onDone={onClose} />
+      ) : null}
     </Sheet>
+  );
+}
+
+function FixedForm({
+  ds,
+  recurring,
+  candidate,
+  onDone,
+}: {
+  ds: Dataset;
+  recurring: Recurring | undefined;
+  candidate: RecurringCandidate | undefined;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState(recurring?.name ?? candidate?.name ?? "");
+  const [amount, setAmount] = useState(rs(recurring?.amount ?? candidate?.amount));
+  const [day, setDay] = useState(String(recurring?.day_of_month ?? candidate?.day_of_month ?? 1));
+  const [wallet, setWallet] = useState<AccountId>(
+    recurring?.account_id ?? candidate?.account_id ?? "sadapay",
+  );
+  const [category, setCategory] = useState(recurring?.category_id ?? candidate?.category_id ?? "");
+  const a = parseRs(amount);
+  const d = Math.min(31, Math.max(1, Number.parseInt(day, 10) || 1));
+  const ok = name.trim() && a;
+  const cats = [...ds.categories].sort(
+    (x, y) => (x.parent_id ?? x.id).localeCompare(y.parent_id ?? y.id) || x.sort - y.sort,
+  );
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!ok || !a) return;
+        void enqueue("upsertRecurring", {
+          recurring_id: recurring?.id ?? newId(),
+          name: name.trim(),
+          account_id: wallet,
+          category_id: category || null,
+          counterparty_id: recurring?.counterparty_id ?? candidate?.counterparty_id ?? null,
+          amount: Math.abs(a),
+          day_of_month: d,
+          active: true,
+        });
+        onDone();
+      }}
+    >
+      <Field label="Name">
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Electricity" />
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Amount">
+          <MoneyInput label="Amount" value={amount} onChange={setAmount} />
+        </Field>
+        <Field label="Day of month">
+          <Input
+            inputMode="numeric"
+            value={day}
+            onChange={(e) => setDay(e.target.value.replace(/\D/g, ""))}
+          />
+        </Field>
+      </div>
+      <Segmented
+        label="Wallet"
+        value={wallet}
+        onValueChange={setWallet}
+        options={[
+          { value: "sadapay", label: "SadaPay" },
+          { value: "nayapay", label: "NayaPay" },
+        ]}
+      />
+      <Field label="Category">
+        <select
+          className="h-12 rounded-control border border-border bg-surface px-3"
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+        >
+          <option value="">None</option>
+          {cats.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.parent_id ? `${ds.categories.find((p) => p.id === c.parent_id)?.name} › ${c.name}` : c.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Button type="submit" variant="primary" size="lg" disabled={!ok}>
+        {recurring ? "Save" : "Add fixed charge"}
+      </Button>
+      {recurring ? (
+        <Button
+          variant="danger"
+          onClick={() => {
+            void enqueue("deleteRecurring", { recurring_id: recurring.id });
+            onDone();
+          }}
+        >
+          Delete
+        </Button>
+      ) : null}
+    </form>
+  );
+}
+
+function BudgetForm({
+  category,
+  average,
+  onDone,
+}: {
+  category: Category;
+  average: number | null;
+  onDone: () => void;
+}) {
+  const [v, setV] = useState(rs(category.budget ?? undefined));
+  const paisa = v.trim() === "" ? null : parseRs(v);
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void enqueue("upsertCategory", {
+          category_id: category.id,
+          parent_id: category.parent_id,
+          name: category.name,
+          icon: category.icon,
+          wallet_hint: category.wallet_hint,
+          nature: category.nature,
+          hidden: category.hidden,
+          sort: category.sort,
+          budget: paisa && paisa > 0 ? paisa : null,
+        });
+        onDone();
+      }}
+    >
+      <MoneyInput label="Budget" value={v} onChange={setV} autoFocus />
+      <p className="num text-sm text-fg-muted">
+        {average !== null
+          ? `Your average is ${formatRs(average)} a month.`
+          : "No history yet — a budget fills the gap."}{" "}
+        Leave it empty to plan with the average.
+      </p>
+      <Button type="submit" variant="primary" size="lg">
+        {paisa ? `Budget ${formatRs(paisa)} a month` : "Use the average"}
+      </Button>
+    </form>
   );
 }
 

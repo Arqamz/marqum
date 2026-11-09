@@ -21,6 +21,8 @@ const NAMES: Record<Command["name"], string> = {
   setSetting: "Setting",
   closeMonth: "Close",
   reopenMonth: "Reopen",
+  resetLedger: "Ledger reset",
+  setOpeningBalance: "Opening balance",
 };
 
 export function describeCommand(c: Command | undefined): string {

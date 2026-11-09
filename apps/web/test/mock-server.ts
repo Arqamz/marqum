@@ -26,6 +26,7 @@ export class MockServer {
   seen = new Map<string, unknown>();
   passcode = "2468";
   token = "test-token";
+  epoch = "epoch-1";
   private n = 0;
 
   constructor(public now: string) {
@@ -55,6 +56,7 @@ export class MockServer {
     if (outcome.ok) {
       this.apply(outcome.mutations);
       this.log.push(command);
+      if (command.name === "resetLedger") this.epoch = `epoch-${this.version}`;
     }
     const result = {
       id: command.id,
@@ -65,6 +67,14 @@ export class MockServer {
     };
     if (outcome.ok) this.seen.set(command.id, result);
     return result;
+  }
+
+  /** Simulate a reset done from another device: new epoch, ledger rows gone. */
+  resetElsewhere(): void {
+    this.epoch = `epoch-other-${this.version}`;
+    for (const t of ["transactions", "statements", "balances", "months", "notifications", "goal_moves"])
+      this.rows.get(t)?.clear();
+    this.version++;
   }
 
   /** Route a request like the Worker would. */
@@ -92,7 +102,7 @@ export class MockServer {
         const rows = [...(this.rows.get(t)?.values() ?? [])].filter((r) => r.version > since);
         if (rows.length) changes[t] = rows;
       }
-      return { status: 200, body: { version: this.version, changes, more: false } };
+      return { status: 200, body: { version: this.version, changes, more: false, epoch: this.epoch } };
     }
     const check = path.match(/^\/api\/months\/(\d{4}-\d{2})\/check$/);
     if (check?.[1]) return { status: 200, body: closeChecklist(this.dataset(), check[1], this.now) };
