@@ -119,7 +119,8 @@ export const BalanceEntry = z.object({
   account_id: AccountId,
   as_of: LocalDateTime,
   balance: Paisa,
-  source: z.enum(["statement_open", "statement_close", "manual"]),
+  /** notification = "available balance" stated in a bank notification (SadaPay includes it) */
+  source: z.enum(["statement_open", "statement_close", "manual", "notification"]),
   statement_id: Id.nullable(),
   ...synced,
 });
@@ -175,6 +176,13 @@ export const Recurring = z.object({
   counterparty_id: Id.nullable(),
   amount: Paisa, // positive: expected monthly outflow
   day_of_month: z.number().int().min(1).max(31),
+  /** monthly, or yearly in `month_of_year` (1–12). Yearly charges are planned as amount/12 per month (sinking fund). */
+  cadence: z.enum(["monthly", "yearly"]).default("monthly"),
+  month_of_year: z.number().int().min(1).max(12).nullable().default(null),
+  /** "subscription" (iCloud, Spotify…) or "bill" (electricity, guard…) — shown as a badge, used for grouping */
+  kind: z.enum(["subscription", "bill", "other"]).default("other"),
+  /** transaction the charge was created from, if any */
+  source_txn_id: Id.nullable().default(null),
   active: z.boolean(),
   detected: z.boolean(),
   ...synced,

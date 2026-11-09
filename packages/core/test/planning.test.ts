@@ -71,7 +71,7 @@ describe("budgetModel", () => {
     });
     expect(m.lines.map((l) => [l.kind, l.label, l.amount])).toEqual([
       ["income", "Income into wallets", rs(85000)],
-      ["committed", "Fixed charges (1)", rs(5000)],
+      ["committed", "Guard", rs(5000)],
       ["committed", "Bicycle loan (Mom)", rs(9000)],
       ["committed", "Subscriptions (average, no fixed charge set)", rs(2000)],
       ["variable", "Car (average)", rs(10000)],

@@ -1,6 +1,6 @@
 // Table-driven so real notification samples can be added as they arrive (anonymise names/numbers first).
 import { describe, expect, it } from "vitest";
-import { parseNotification } from "../src/notifications.ts";
+import { cleanMerchant, isNonTransaction, parseNotification } from "../src/notifications.ts";
 
 const NAYA = "com.nayapay.app";
 const SADA = "com.sadapay.app";
@@ -11,14 +11,42 @@ type Expect = {
   amount: number;
   counterparty_name?: string | null;
   reason?: string | null;
+  balance_after?: number | null;
 };
 const CASES: [pkg: string, title: string, text: string, expected: Expect | null][] = [
+  // ---- real formats (wording kept, merchants/amounts/digits replaced with synthetic ones)
+  [
+    SADA,
+    "Message from SadaPay",
+    "You spent PKR 1,234.00 at NetflixX12AB34CD56     Amsterdam     NLD. Your available balance is PKR 20500.50.",
+    { account_id: "sadapay", amount: -123400, counterparty_name: "Netflix", balance_after: 2050050 },
+  ],
+  [
+    NAYA,
+    "Card Authorization",
+    "You have authorized TEST *SERVICE TEMP cc@example.comUS on Visa Physical-0000.",
+    null,
+  ],
+  [
+    NAYA,
+    "Verify online payment 🔐",
+    "Tap to confirm Rs. 1,500 payment to G-9 (TEST BAKERY - ISD-RWP).",
+    null,
+  ],
+  [
+    NAYA,
+    "Card in action 💳",
+    "You spent Rs. 1,500 online at G-9 (Test Bakery - Isd-rwp) Karachi Pk. Zero hesitation, we love it.",
+    { account_id: "nayapay", amount: -150000, counterparty_name: "Test Bakery", balance_after: null },
+  ],
+  // ---- plausible variants
   // money in
+  [NAYA, "Approve payment", "Please approve this payment of Rs 900 to Test Shop", null],
   [
     NAYA,
     "Money Received",
     "You have received Rs. 12,300 from Test User. Your new balance is Rs. 12,042.50",
-    { account_id: "nayapay", amount: 1230000, counterparty_name: "Test User" },
+    { account_id: "nayapay", amount: 1230000, counterparty_name: "Test User", balance_after: 1204250 },
   ],
   [
     SADA,
@@ -127,4 +155,30 @@ describe("parseNotification", () => {
     expect(got).toMatchObject({ occurred_at: AT, ...expected });
     expect(got?.description.length).toBeGreaterThan(0);
   });
+});
+
+describe("cleanMerchant", () => {
+  it.each([
+    ["NetflixX12AB34CD56     Amsterdam     NLD", "Netflix"],
+    ["G-9 (Test Bakery - Isd-rwp) Karachi Pk", "Test Bakery"],
+    ["Test Store Lahore PK", "Test Store"],
+    ["FOODPANDA KARACHI", "FOODPANDA KARACHI"],
+    ["Apple.com/bill", "Apple.com/bill"],
+    ["Imtiaz Super Market", "Imtiaz Super Market"],
+  ])("%s → %s", (raw, expected) => expect(cleanMerchant(raw)).toBe(expected));
+});
+
+it("isNonTransaction flags prompts but not spends", () => {
+  expect(
+    isNonTransaction(
+      "Verify online payment",
+      "Tap to confirm Rs. 1,500 payment to G-9 (TEST BAKERY - ISD-RWP).",
+    ),
+  ).toBe(true);
+  expect(
+    isNonTransaction(
+      "Card in action",
+      "You spent Rs. 1,500 online at G-9 (Test Bakery - Isd-rwp) Karachi Pk.",
+    ),
+  ).toBe(false);
 });

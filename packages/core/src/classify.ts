@@ -37,7 +37,9 @@ const NOISE = new Set([
   "REF",
 ]);
 
-const FEE_TEXT = /\b(service charges?|fee|tax deducted|withholding|excise duty|fed)\b/i;
+/** Bank fees and taxes (incl. the international transaction tax / FED SadaPay adds to foreign card spends). */
+export const FEE_TEXT =
+  /\b(service charges?|fees?|tax|taxes|tax deducted|withholding|excise duty|fed|international transaction (tax|fee|charges?))\b/i;
 
 export interface ExtractedCounterparty {
   key: string;
@@ -208,6 +210,8 @@ export function classify(ds: Dataset, t: ClassifyInput, cpOverride?: Counterpart
   }
   if (flow === null) flow = inferFlow(t, cp);
   if (flow === "funding" || flow === "internal") category_id = null;
+  if (flow === "fee" && category_id === null && ds.categories.some((c) => c.id === "fees" && !c.deleted))
+    category_id = "fees";
   return {
     category_id,
     flow,

@@ -38,7 +38,8 @@ flow on quick-add, or an existing tag) always wins over all of this.
 A rule or counterparty flow only applies when it fits the direction: `income`, `reimbursement`, `loan_in` and
 `funding` only on money in; `spend`, `fee` and `loan_repay` only on money out. This stops the seed rule
 `meezan → funding` from hiding a payment _to_ a friend's Meezan account. `funding` and `internal` rows never carry
-a category.
+a category. A `fee` row with no category gets **Fees & charges** (`fees`). Fee text includes service charges,
+fees, tax, FED, excise duty and "International transaction tax/fee".
 
 **Counterparty key.** The person or merchant is extracted from the bank text, then upper-cased with digits,
 punctuation, bank and city words removed (at most four words):
@@ -59,9 +60,21 @@ internal.
 
 ## Reconciliation
 
-A statement row matches a provisional (or disputed) transaction when it is the same wallet, has exactly the same
-amount, and is within ±36 hours. Matching is one-to-one, best first: smallest time gap, then most shared
-description words, then by id (so the result is deterministic).
+A statement row matches a provisional (or disputed) transaction in two passes. Both are one-to-one, best first:
+smallest time gap, then most shared description words, then by id (so the result is deterministic).
+
+1. **Exact:** the same wallet, exactly the same amount, and within ±36 hours.
+2. **Tolerant**, for rows left over. All of these must hold:
+   - the same wallet, both outflows, within ±36 hours;
+   - **merchant-word overlap ≥ 0.5**. Words are letters only (digits split words), at least 2 long, with no
+     transfer jargon. Overlap = shared words ÷ the smaller word set, and a prefix of 4+ letters counts as shared,
+     so `SPOTIFYP` ~ `SPOTIFY`;
+   - |statement| between |notified| and |notified| × **1.40**.
+
+   Notifications can leave out tax or fees the bank adds later. Example: a notification says Rs 679 at
+   "MusicCoP48F8… Stockholm"; the statement charges Rs 800 at "MUSICCO P48F8… STOCKHOLM". The verified row takes
+   the statement amount, and the import result lists `corrected: [{ txn_id, from: −67,900, to: −80,000 }]`. The
+   reason is left untouched.
 
 **Importing a statement** for wallet W and period [from 00:00, to 23:59]:
 
@@ -80,8 +93,12 @@ description words, then by id (so the result is deterministic).
 9. If the statement spans tracking start and has an opening, the first month's b/f becomes opening + Σ statement
    rows before tracking start, unless you set it with `setOpeningBalance`.
 
+10. A new fee row (e.g. "International transaction tax") within ±48 hours of a matched notification is classified
+    `fee` / `fees` and reported as `fees: [{ external_id, near_txn_id }]`, so the UI can show it next to the
+    spend.
+
 Re-importing an identical statement writes nothing. The result reports
-`{ added, updated, unchanged, removed, matched, disputed, ignored }`.
+`{ added, updated, unchanged, removed, matched, disputed, ignored, corrected, fees }`.
 
 ## Accounting model (b/f → c/f)
 
@@ -131,14 +148,28 @@ a virtual b/f of 3,000 (NayaPay) and 100 (SadaPay).
   cancel).
 - **provisional_delta** = Σ provisional/disputed amounts.
 - **verified_until** = the latest `period_to` among the wallet's statements.
-- **unaccounted** = the latest manual balance (on or after tracking start) − the ledger balance at that moment.
+- **unaccounted** = the latest **stated** balance − the ledger balance at that moment. A stated balance is one
+  you typed (manual), or SadaPay's "available balance" in a notification (`notification`), on or after tracking
+  start.
+- **unaccounted_hint** (null within Rs 1):
+  - opening unknown and a stated balance exists → "Opening balance not set — set SadaPay's 1 Nov opening to
+    Rs 32,028.94?";
+  - a shortfall from a notification → "Rs 121 not in your notifications yet — likely fees or tax; your next
+    statement will show it";
+  - a shortfall from a typed balance → "Rs 121 spent that isn't recorded yet — add it, or wait for the
+    statement";
+  - an excess → "Rs X more than recorded — an incoming payment may be missing".
+- **suggestOpeningBalance(wallet)**: only while the first month's b/f is unknown (no reason recorded). It is the
+  latest stated balance − Σ ledger up to that instant, excluding the b/f, returned as `{ amount, from:
+  "notification 8 Nov 18:58" }`. Example: a spend of −Rs 679 at 18:58 with "available balance PKR 31,349.94" →
+  open at **Rs 32,028.94**.
 
 Example (NayaPay, b/f Rs 5,000): −Rs 200 on 8 Nov. On 9 Nov you type Rs 4,700, but the ledger says 4,800, so
 **unaccounted = −Rs 100**. A provisional −Rs 50 follows on 10 Nov: balance **Rs 4,750**, provisional_delta −Rs 50. A
 statement closing assertion doesn't change any of this; the close checklist compares it.
 
-**SadaPay floor** = Σ goal envelopes (Σ goal moves per goal, each floored at 0) + Σ active recurring payments on
-SadaPay (next month's bills). **Free savings** = SadaPay balance − floor (can be negative).
+**SadaPay floor** = Σ goal envelopes (Σ goal moves per goal, each floored at 0) + Σ active fixed charges on
+SadaPay at their monthly equivalent (monthly = amount; yearly = amount ÷ 12). **Free savings** = SadaPay balance − floor (can be negative).
 
 Example: envelopes Rs 500 + Rs 300, iCloud Rs 900 recurring on SadaPay → floor **Rs 1,700**. An inactive
 recurring row, or one on NayaPay, doesn't count.
@@ -222,7 +253,44 @@ payments and no Recurring row already exists for the same wallet and counterpart
 amount is the median of the run, and its day is the median day of month.
 
 Example: 3 Jul Rs 900, 2 Aug Rs 900, 3 Sep Rs 920, 3 Oct Rs 890 (plus an unrelated Rs 3,000 on 15 Oct) → one
-candidate: Rs 900 on day 3, 4 occurrences.
+candidate: Rs 900 on day 3, 4 occurrences, `cadence: "monthly"`.
+
+If there is no monthly run, the same is tried with gaps of **350–380 days** and **≥ 2** payments. That gives
+`cadence: "yearly"`, with `month_of_year` = the month of the last payment. Example: Rs 12,000 on 4 Mar 2025 and
+Rs 12,500 on 6 Mar 2026 → yearly, March.
+
+## Fixed charges and expected charges
+
+Fixed charges (Recurring rows) are entered by you; `detectRecurring` only proposes them. Each has:
+
+- `cadence`: monthly, or yearly in `month_of_year`;
+- `kind`: subscription / bill / other;
+- an optional `source_txn_id`. When a charge is created from a transaction, `upsertRecurring` fills an empty
+  counterparty/category (and a yearly month) from it. Omitted cadence/month/kind/source keep their stored values.
+
+**Planning** treats a yearly charge as a **sinking fund**: amount ÷ 12 is set aside every month. The plan line reads
+"Domain (yearly ÷ 12, set aside monthly)", and the allocation shows "Set aside for yearly charges". The
+**projection** books the full charge in its month, because that's when the cash leaves.
+
+**expectedCharges(month)**: every active charge due that month on its `day_of_month` (clamped to the month's
+length; a yearly charge only in its month).
+
+- It is **paid** by:
+  - its source transaction, if that falls within the window; or
+  - an outflow within **−7…+10 days** of the due date that matches the counterparty, or the category (or a
+    subcategory) with the amount within **±15%**.
+
+  Same-wallet matches are preferred; any wallet is accepted otherwise. Each transaction pays at most one charge,
+  and earlier due dates are matched first.
+- Unpaid charges are **missed** once today is after due + 10 days, **due** from due − 2 days, and **upcoming**
+  before that.
+- `amount` is the paying transaction's amount, or the expected amount.
+
+Example (15 Nov): Guard due 1 Nov, paid 2 Nov from NayaPay → paid. Electricity due 20 Nov → upcoming (due from 18
+Nov, missed after 30 Nov). iCloud on day 31 → due 30 Nov.
+
+`categoryMonthDetail` includes the category's expected charges (`expected`). The close checklist warns about every
+unpaid one.
 
 ## Budget model
 
@@ -230,15 +298,15 @@ candidate: Rs 900 on day 3, 4 occurrences.
 `average` or `none`). A fixed category covered by an active fixed charge (Recurring row) in its subtree is
 reported as `recurring` and not counted again.
 
-| Quantity             | Definition                                                                                                                               |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| income I             | setting `income_monthly` (default Rs 85,000)                                                                                             |
-| committed C          | Σ active fixed charges + Σ installments of open loans (capped at what's left) + planned spend of fixed categories without a fixed charge |
-| variable V           | Σ planned spend of top-level **variable** categories (hidden ones included)                                                              |
-| goal contributions G | Σ `monthly` of goals not achieved and not yet fully saved                                                                                |
-| surplus S            | I − C − V − G                                                                                                                            |
-| floor                | as above                                                                                                                                 |
-| free savings F       | SadaPay balance − floor                                                                                                                  |
+| Quantity             | Definition                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| income I             | setting `income_monthly` (default Rs 85,000)                                                                                                           |
+| committed C          | Σ active fixed charges (yearly ÷ 12) + Σ installments of open loans (capped at what's left) + planned spend of fixed categories without a fixed charge |
+| variable V           | Σ planned spend of top-level **variable** categories (hidden ones included)                                                                            |
+| goal contributions G | Σ `monthly` of goals not achieved and not yet fully saved                                                                                              |
+| surplus S            | I − C − V − G                                                                                                                                          |
+| floor                | as above                                                                                                                                               |
+| free savings F       | SadaPay balance − floor                                                                                                                                |
 
 **Levers** `{category_id, pct}` adjust planned spend before anything else: plan(top) + plan(target) × pct/100 for
 each lever whose target is the top-level category or one of its subcategories.
@@ -273,7 +341,8 @@ to its default), and each call may override them:
 Per month:
 
 - income = the latest step with from ≤ month, else `income_monthly`;
-- fixed = fixed charges + planned fixed categories without a fixed charge;
+- fixed = monthly fixed charges + yearly charges in full in their `month_of_year` + planned fixed categories without
+  a fixed charge;
 - variable.expected = Σ variable planned spend (after `category_adjust`) × (1 + spend_adjust_pct/100);
 - **spread**:
   - with ≥ 3 complete tracked months of history: the standard deviation of their monthly variable totals (at
@@ -371,7 +440,7 @@ Example: Bicycle, Rs 40,000 remaining at Rs 10,000/month, nothing moved yet in N
 `allocation(ds, now)` returns the user's split when setting `allocation_sadapay` is set (NayaPay gets the rest),
 otherwise the suggestion:
 
-- **SadaPay** = SadaPay fixed charges + loan installments + goal contributions + planned spend (budget ?? average)
+- **SadaPay** = SadaPay fixed charges (yearly ones ÷ 12 as "Set aside for yearly charges") + loan installments + goal contributions + planned spend (budget ?? average)
   of categories whose wallet hint is SadaPay and that aren't covered by a fixed charge.
 - **NayaPay** = income − SadaPay (≥ 0).
 - If all of that is 0 (nothing entered yet), the suggestion is **50/50** with the line "Add your fixed charges to
@@ -400,10 +469,10 @@ nothing to close"), so it can never be closed or nagged about.
 
 **Warn items:**
 
-- the latest balance you typed in the month differs from the ledger at that moment by more than Rs 1;
+- the latest stated balance in the month (typed, or from a notification) differs from the ledger at that moment by
+  more than Rs 1;
 - a `spend` transfer to a person (by description) with no reason;
-- an active recurring payment with no outflow in the month on its wallet within ±10% of its amount and matching
-  its counterparty or category;
+- expected charges in the month that aren't paid ("1 expected charge not seen: iCloud (Rs 900)");
 - a loan started before the month, still outstanding, with no `loan_repay` in the month.
 
 Labels carry counts and amounts, e.g. "Categorise 2 transactions (Rs 800)", and each item links to a route that

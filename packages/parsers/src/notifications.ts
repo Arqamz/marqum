@@ -14,6 +14,8 @@ export interface ParsedNotification {
   reason: string | null;
   description: string;
   occurred_at: string;
+  /** "Your available balance is PKR X" → paisa, when the bank states it */
+  balance_after: number | null;
 }
 
 /** OTPs, logins, security and marketing messages — never transactions. */
@@ -23,6 +25,8 @@ const IGNORE = [
   /\b(offer|promo(?:tion)?|discount|% off|limited time|hurry|win(?: up to)?|chance to|get up to|upgrade now|update (?:the|your) app|new feature|invite|refer(?:ral)?)\b/i,
   /\b(request(?:ed|s)? (?:rs|pkr|money|payment)|payment request|has requested|requesting)\b/i,
   /\b(failed|declined|unsuccessful|reversed? pending|insufficient)\b/i,
+  // approval prompts and card authorisations — the real spend arrives as its own notification
+  /\b(tap to (?:confirm|approve|verify|authori[sz]e)|verify (?:online |your |this )?(?:payment|transaction|purchase)|confirm (?:your |the |this )?(?:payment|transaction|purchase)|approve (?:your |the |this )?(?:payment|transaction)|awaiting (?:your )?approval|authori[sz](?:e|ed|es|ation|ing))\b/i,
 ];
 
 /** Credit phrases are checked first: "X sent you Rs 500" contains "sent" but is money in. */
@@ -52,6 +56,41 @@ const NAME = "([A-Za-z][A-Za-z0-9.&'*/_ -]{0,48}?)";
 const JUNK =
   /^(you|your|yours|me|my|the|a|an|account|wallet|card|nayapay|sadapay|bank|rs|pkr|it|this)(\s+(account|wallet|card))?$/i;
 
+const BALANCE_RE =
+  /\b(?:available|new|current|remaining|updated)\s+(?:wallet\s+|account\s+)?balance\s*(?:is|of|:)?\s*(?:rs\.?|pkr|₨)\s*([+-]?\d[\d,]*(?:\.\d{1,2})?)/i;
+
+function findBalance(text: string): number | null {
+  const m = text.match(BALANCE_RE);
+  return m?.[1] ? parseAmount(m[1].replace(/\s+/g, "")) : null;
+}
+
+/** ISO-ish country codes card networks append to merchant names ("… Stockholm SWE", "… Karachi Pk"). */
+const COUNTRY =
+  /^(pk|pak|us|usa|gb|gbr|uk|ie|irl|nl|nld|se|swe|sg|sgp|ae|are|de|deu|fr|fra|ca|can|au|aus|lu|lux|hk|hkg|in|ind|cn|chn|tr|tur|sa|sau|qa|qat|ch|che|es|esp|it|ita|my|mys)$/i;
+
+/**
+ * Card-network merchant strings → a readable name:
+ * "NetflixX12AB34CD56     Amsterdam     NLD" → "Netflix"; "G-9 (Test Bakery - Isd-rwp) Karachi Pk" → "Test Bakery".
+ */
+export function cleanMerchant(raw: string): string {
+  let s = raw.trim();
+  // "<branch code> (<Merchant> - <area>) …" → Merchant
+  const branch = s.match(/^([A-Za-z0-9][\w-]{0,7})\s*\(([^()]+)\)/);
+  if (branch?.[1] && branch[2] && /[\d-]/.test(branch[1])) s = branch[2].split(/\s+-\s+/)[0] ?? s;
+  // padded columns: "<merchant>     <city>     <country>"
+  s = s.split(/\s{2,}/)[0] ?? s;
+  // trailing country (+ the city before it)
+  const words = s.split(" ");
+  if (words.length >= 3 && COUNTRY.test(words.at(-1) ?? "")) s = words.slice(0, -2).join(" ");
+  // trailing reference glued to the name: "NetflixX12AB34CD56" → "Netflix"
+  s = s.replace(/^(.*?[a-z])[A-Z]?\d[0-9A-Z]{4,}$/, "$1");
+  return s.replace(/\s+/g, " ").trim() || raw.trim();
+}
+
+/** "at <merchant>" up to the end of the clause; allows parentheses and dots inside names (Apple.com/bill). */
+const AT_MERCHANT =
+  /\bat\s+((?:[^.!;\n]|\.(?![\s]|$)){1,90}?)(?=\s+(?:on|via|using|with|for|was|is|has|through|successful(?:ly)?|done|completed)\b|[.!;](?:\s|$)|\n|$)/i;
+
 function cleanName(raw: string | undefined): string | null {
   if (!raw) return null;
   const name = raw
@@ -71,12 +110,13 @@ function findCounterparty(text: string, credit: boolean): string | null {
       ]
     : [
         new RegExp(`\\bto\\s+${NAME}${STOP}`, "i"),
-        new RegExp(`\\bat\\s+${NAME}${STOP}`, "i"),
+        AT_MERCHANT,
         new RegExp(`\\b(?:paid|payment to|purchase at)\\s+${NAME}${STOP}`, "i"),
       ];
   for (const re of tries) {
     for (const sentence of text.split(/(?<=[.!])\s+|\n/)) {
-      const name = cleanName(sentence.trim().match(re)?.[1]);
+      const hit = sentence.trim().match(re)?.[1];
+      const name = cleanName(re === AT_MERCHANT && hit ? cleanMerchant(hit) : hit);
       if (name) return name;
     }
   }
@@ -91,6 +131,12 @@ function findReason(text: string): string | null {
   const quoted = text.match(/\b(?:with (?:the )?(?:message|note)|saying|for)\s*["“'‘](.+?)["”'’]/i);
   if (quoted?.[1]) return quoted[1].trim();
   return null;
+}
+
+/** True for OTPs, logins, promotions, payment requests/prompts and authorisations — never a transaction. */
+export function isNonTransaction(title: string, text: string): boolean {
+  const all = [title, text].filter(Boolean).join("\n");
+  return IGNORE.some((re) => re.test(all));
 }
 
 export function parseNotification(
@@ -121,5 +167,6 @@ export function parseNotification(
     reason: findReason(all),
     description: body.replace(/\s+/g, " ").trim(),
     occurred_at: posted_at,
+    balance_after: findBalance(all),
   };
 }

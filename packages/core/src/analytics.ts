@@ -1,4 +1,4 @@
-import type { AccountId, Category, Transaction } from "@marqum/schema";
+import type { AccountId, Category, Recurring, Transaction } from "@marqum/schema";
 import { isBf, isCarry, isCf } from "./carry.ts";
 import { counterpartyKey, normalizeKey } from "./classify.ts";
 import { isClosed, trackingStartMonth } from "./dataset.ts";
@@ -32,6 +32,7 @@ import type {
   CategoryMonthDetail,
   CounterpartyStats,
   Dataset,
+  ExpectedCharge,
   MonthLedger,
   NetPosition,
   RecurringCandidate,
@@ -204,7 +205,8 @@ export function counterpartyStats(ds: Dataset, counterpartyId: string, now: stri
 }
 
 /**
- * Recurring payments not yet tracked: outflows (spend/fee) grouped by counterparty (or description key) and
+ * Recurring payments not yet tracked (monthly: ≥ 3 payments 25–35 days apart; yearly: ≥ 2 payments 350–380 days
+ * apart): outflows (spend/fee) grouped by counterparty (or description key) and
  * wallet; amounts within ±10% of the group median; the most recent run of ≥3 payments whose consecutive gaps
  * are all 25–35 days. Groups already covered by a Recurring row (same wallet and counterparty/name) are excluded.
  */
@@ -233,14 +235,24 @@ export function detectRecurring(ds: Dataset): RecurringCandidate[] {
     const members = g.txns
       .filter((t) => Math.abs(-t.amount - med) <= med * 0.1)
       .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
-    if (members.length < 3) continue;
-    const run: Transaction[] = [members.at(-1) as Transaction];
-    for (let i = members.length - 2; i >= 0; i--) {
-      const gap = daysBetween((members[i] as Transaction).occurred_at, (run[0] as Transaction).occurred_at);
-      if (gap < 25 || gap > 35) break;
-      run.unshift(members[i] as Transaction);
+    if (members.length < 2) continue;
+    // the most recent run of payments with every gap in [lo, hi] days
+    const runOf = (lo: number, hi: number): Transaction[] => {
+      const run: Transaction[] = [members.at(-1) as Transaction];
+      for (let i = members.length - 2; i >= 0; i--) {
+        const gap = daysBetween((members[i] as Transaction).occurred_at, (run[0] as Transaction).occurred_at);
+        if (gap < lo || gap > hi) break;
+        run.unshift(members[i] as Transaction);
+      }
+      return run;
+    };
+    let run = runOf(25, 35);
+    let cadence: "monthly" | "yearly" = "monthly";
+    if (run.length < 3) {
+      run = runOf(350, 380);
+      cadence = "yearly";
+      if (run.length < 2) continue;
     }
-    if (run.length < 3) continue;
     const cp = g.cpId ? ds.counterparties.find((c) => c.id === g.cpId) : undefined;
     const name = cp?.name ?? g.key;
     const covered = ds.recurring.some(
@@ -266,6 +278,9 @@ export function detectRecurring(ds: Dataset): RecurringCandidate[] {
       occurrences: run.length,
       last_seen: (run.at(-1) as Transaction).occurred_at,
       category_id,
+      cadence,
+      month_of_year:
+        cadence === "yearly" ? Number((run.at(-1) as Transaction).occurred_at.slice(5, 7)) : null,
     });
   }
   return out.sort((a, b) => b.amount - a.amount || a.key.localeCompare(b.key));
@@ -476,5 +491,73 @@ export function categoryMonthDetail(
     prev_month_total: prev,
     change_pct: prev > 0 ? Math.round(((b.total - prev) / prev) * 1000) / 10 : null,
     parts: b.parts,
+    expected: expectedCharges(ds, month, now).filter(
+      (e) => e.recurring.category_id !== null && subtreeIds(ds, categoryId).has(e.recurring.category_id),
+    ),
   };
 }
+
+// ───────────────────────── expected charges ─────────────────────────
+
+/** Due date of a fixed charge in a month (day clamped to the month length), or null if it isn't due that month. */
+export function dueDate(r: Recurring, month: string): string | null {
+  if (r.cadence === "yearly" && Number(month.slice(5, 7)) !== r.month_of_year) return null;
+  const day = Math.min(r.day_of_month, daysInMonth(month));
+  return `${month}-${String(day).padStart(2, "0")}`;
+}
+
+/**
+ * Fixed charges expected in `month` and whether a transaction paid them. A charge is paid by its source
+ * transaction (if it falls in −7…+10 days of the due date) or by an outflow in that window that matches the
+ * counterparty, or the category (incl. subcategories) with the amount within ±15%. Same-wallet matches are
+ * preferred; each transaction pays at most one charge. Unpaid: missed after due+10 days, due from due−2 days,
+ * otherwise upcoming.
+ */
+export function expectedCharges(ds: Dataset, month: string, now: string): ExpectedCharge[] {
+  if (month < trackingStartMonth(ds)) return [];
+  const today = now.slice(0, 10);
+  const charges = ds.recurring
+    .filter((r) => !r.deleted && r.active)
+    .map((r) => ({ r, due: dueDate(r, month) }))
+    .filter((x): x is { r: Recurring; due: string } => x.due !== null)
+    .sort((a, b) => a.due.localeCompare(b.due) || a.r.id.localeCompare(b.r.id));
+  const outflows = liveTxns(ds).filter((t) => t.amount < 0 && !isCarry(t));
+  const used = new Set<string>();
+  return charges.map(({ r, due }) => {
+    const from = `${addDays(due, -7)}T00:00`;
+    const to = `${addDays(due, 10)}T23:59`;
+    const inWindow = (t: Transaction) => t.occurred_at >= from && t.occurred_at <= to && !used.has(t.id);
+    const cats = r.category_id ? subtreeIds(ds, r.category_id) : null;
+    const amt = Math.abs(r.amount);
+    const fits = (t: Transaction) =>
+      t.id === r.source_txn_id ||
+      (r.counterparty_id !== null && t.counterparty_id === r.counterparty_id) ||
+      (cats !== null &&
+        t.category_id !== null &&
+        cats.has(t.category_id) &&
+        Math.abs(-t.amount - amt) <= amt * 0.15);
+    const close = (a: Transaction, b: Transaction) =>
+      Math.abs(daysBetween(due, a.occurred_at)) - Math.abs(daysBetween(due, b.occurred_at)) ||
+      a.id.localeCompare(b.id);
+    const candidates = outflows.filter((t) => inWindow(t) && fits(t));
+    const match =
+      candidates.find((t) => t.id === r.source_txn_id) ??
+      candidates.filter((t) => t.account_id === r.account_id).sort(close)[0] ??
+      candidates.sort(close)[0];
+    if (match) used.add(match.id);
+    let status: ExpectedCharge["status"];
+    if (match) status = "paid";
+    else if (today > addDays(due, 10)) status = "missed";
+    else if (today >= addDays(due, -2)) status = "due";
+    else status = "upcoming";
+    return {
+      recurring: r,
+      due_date: due,
+      status,
+      matched_txn_id: match?.id ?? null,
+      amount: match ? -match.amount : amt,
+    };
+  });
+}
+
+export { suggestOpeningBalance } from "./ledger.ts";

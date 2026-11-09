@@ -1,4 +1,5 @@
 import type { AccountId, Statement, Transaction } from "@marqum/schema";
+import { expectedCharges } from "./analytics.ts";
 import { carryId } from "./carry.ts";
 import { extractCounterparty } from "./classify.ts";
 import { isClosed, trackingStart, trackingStartMonth } from "./dataset.ts";
@@ -232,7 +233,7 @@ export function closeChecklist(ds: Dataset, month: string, now: string): CloseCh
     });
 
     const manual = assertions(ds, acc)
-      .filter((b) => b.source === "manual" && monthOf(b.as_of) === month)
+      .filter((b) => (b.source === "manual" || b.source === "notification") && monthOf(b.as_of) === month)
       .at(-1);
     if (manual) {
       const gap = manual.balance - balanceAt(ds, acc, manual.as_of);
@@ -263,30 +264,18 @@ export function closeChecklist(ds: Dataset, month: string, now: string): CloseCh
     action: `/activity?${q}&filter=noreason`,
   });
 
-  const missingRecurring = ds.recurring.filter((r) => {
-    if (r.deleted || !r.active) return false;
-    const amt = Math.abs(r.amount);
-    return !inMonth.some(
-      (t) =>
-        t.account_id === r.account_id &&
-        t.amount < 0 &&
-        Math.abs(-t.amount - amt) <= amt * 0.1 &&
-        ((r.counterparty_id !== null && t.counterparty_id === r.counterparty_id) ||
-          (r.category_id !== null && t.category_id === r.category_id) ||
-          (r.counterparty_id === null && r.category_id === null)),
-    );
-  });
+  const unpaid = expectedCharges(ds, month, now).filter((e) => e.status !== "paid");
   items.push({
     id: "recurring",
-    ok: missingRecurring.length === 0,
+    ok: unpaid.length === 0,
     severity: "warn",
     label:
-      missingRecurring.length === 0
-        ? "All recurring payments seen"
-        : `${plural(missingRecurring.length, "recurring payment", "recurring payments")} not seen: ${missingRecurring
-            .map((r) => `${r.name} (${formatRs(Math.abs(r.amount))})`)
+      unpaid.length === 0
+        ? "All expected fixed charges seen"
+        : `${plural(unpaid.length, "expected charge", "expected charges")} not seen: ${unpaid
+            .map((e) => `${e.recurring.name} (${formatRs(e.amount)})`)
             .join(", ")}`,
-    action: "/plan/recurring",
+    action: `/activity?${q}&filter=expected`,
   });
 
   const missingLoans = loanStatuses(ds, `${to}T23:59`).filter((s) => {

@@ -5,7 +5,12 @@
  */
 export { parseCsv } from "./csv.ts";
 export { type DetectedFile, detectStatementFile } from "./detect.ts";
-export { type ParsedNotification, parseNotification } from "./notifications.ts";
+export {
+  cleanMerchant,
+  isNonTransaction,
+  type ParsedNotification,
+  parseNotification,
+} from "./notifications.ts";
 export { type Cell, type Line, type PdfjsLike, pdfToLines } from "./pdf-lines.ts";
 export { extractReason, readCsvStatement, readPdfStatement, StatementError } from "./statements.ts";
 export { parseAmount, parseDate, sha256Hex } from "./util.ts";

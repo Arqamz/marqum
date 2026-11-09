@@ -227,7 +227,7 @@ describe("closeChecklist", () => {
       "Add a reason to 1 transfer to people (Rs 1,500)",
     );
     expect(c.items.find((i) => i.id === "recurring")?.label).toBe(
-      "1 recurring payment not seen: iCloud (Rs 900)",
+      "1 expected charge not seen: iCloud (Rs 900)",
     );
     expect(c.items.find((i) => i.id === "loans")?.label).toBe(
       "Loan installment not seen: Bicycle (Rs 9,000)",

@@ -306,6 +306,106 @@ const notif = {
   check(json.status === "ignored" && json.transaction_id === null, "OTP notification ignored", json);
 }
 
+// ---- real notification formats (synthetic merchants/amounts/digits)
+{
+  const nid = (k: number) => `${"0".repeat(60)}${String(k).padStart(4, "0")}`;
+  const ingestN = (k: number, pkg: string, title: string, text: string, posted_at: string) =>
+    api<Record<string, unknown>>("POST", "/api/ingest/notification", {
+      id: nid(k),
+      package: pkg,
+      title,
+      text,
+      posted_at,
+    });
+
+  const verify = await ingestN(
+    10,
+    "com.nayapay.app",
+    "Verify online payment 🔐",
+    "Tap to confirm Rs. 1,500 payment to G-9 (TEST BAKERY - ISD-RWP).",
+    "2026-11-08T13:00",
+  );
+  check(verify.json.status === "ignored", "verify-payment prompt ignored", verify.json);
+  const auth = await ingestN(
+    11,
+    "com.nayapay.app",
+    "Card Authorization",
+    "You have authorized TEST *SERVICE TEMP cc@example.comUS on Visa Physical-0000.",
+    "2026-11-08T13:00",
+  );
+  check(auth.json.status === "ignored", "card authorization ignored", auth.json);
+  const spendText =
+    "You spent Rs. 1,500 online at G-9 (Test Bakery - Isd-rwp) Karachi Pk. Zero hesitation, we love it.";
+  const spend = await ingestN(12, "com.nayapay.app", "Card in action 💳", spendText, "2026-11-08T13:01");
+  check(spend.json.status === "parsed", "card-in-action spend parsed", spend.json);
+  const sadaText =
+    "You spent PKR 1,234.00 at NetflixX12AB34CD56     Amsterdam     NLD. Your available balance is PKR 20500.50.";
+  const sada = await ingestN(13, "com.sadapay.app", "Message from SadaPay", sadaText, "2026-11-08T14:00");
+  check(sada.json.status === "parsed", "SadaPay spend with balance parsed", sada.json);
+  const dup = await ingestN(14, "com.sadapay.app", "Message from SadaPay", sadaText, "2026-11-08T14:01");
+  check(
+    dup.json.status === "ignored" && dup.json.duplicate_of === nid(13),
+    "same spend within 2 min → ignored duplicate",
+    dup.json,
+  );
+
+  await pullAll();
+  const t = replica.transactions?.get(spend.json.transaction_id as string);
+  check(
+    t?.amount === -150000 && t.description === spendText && t.status === "provisional",
+    "spend transaction keeps the full text",
+    t,
+  );
+  const cp = live("counterparties").find((c) => c.id === t.counterparty_id);
+  check(cp?.name === "Test Bakery", "merchant cleaned to Test Bakery", cp);
+  const bal = live("balances").find((b) => b.source === "notification");
+  check(
+    bal?.account_id === "sadapay" && bal.balance === 2050050 && bal.as_of === "2026-11-08T14:00",
+    "SadaPay stated balance recorded as a notification BalanceEntry",
+    live("balances"),
+  );
+  check(
+    replica.notifications?.get(nid(14))?.status === "ignored",
+    "duplicate notification row synced as ignored",
+  );
+
+  const re = {
+    items: [
+      {
+        id: nid(15),
+        package: "com.nayapay.app",
+        title: "Card in action 💳",
+        text: spendText.replace("1,500", "1,700"),
+        posted_at: "2026-11-08T15:00",
+      },
+    ],
+  };
+  const reDenied = await api("POST", "/api/admin/reingest", re);
+  check(reDenied.status === 403, "admin reingest without step-up → 403", reDenied.json);
+  const su = await api<{ step_up_token: string }>("POST", "/api/auth/step-up/passcode", {
+    passcode: PASSCODE,
+  });
+  const reOk = await api<{ results: { status: string }[] }>("POST", "/api/admin/reingest", re, {
+    "X-Step-Up": su.json.step_up_token,
+  });
+  check(
+    reOk.status === 200 && reOk.json.results[0]?.status === "parsed",
+    "admin reingest runs the ingest path",
+    reOk.json,
+  );
+  const early = await api<{ results: { status: string; reason?: string }[] }>(
+    "POST",
+    "/api/admin/reingest",
+    { items: [{ ...re.items[0], id: nid(16), posted_at: "2026-08-15T10:00" }] },
+    { "X-Step-Up": su.json.step_up_token },
+  );
+  check(
+    early.json.results[0]?.status === "ignored" && early.json.results[0]?.reason === "before_tracking_start",
+    "reingest respects tracking_start",
+    early.json,
+  );
+}
+
 // ---- month close
 await push([importCmd(await readCsvStatement(NAYA_OCT), "m-10-2026.csv")]);
 {

@@ -71,8 +71,10 @@ export interface WalletPosition {
   verified_until: string | null;
   /** sum of provisional (warm) transactions included in `balance` */
   provisional_delta: number;
-  /** last manual balance entry minus computed balance at that time (0 if none / consistent) */
+  /** latest manual/notification balance minus the ledger balance at that instant (0 if none) */
   unaccounted: number;
+  /** plain-language explanation of `unaccounted`, or null when it is within Rs 1 */
+  unaccounted_hint: string | null;
   /** vault only: money reserved for goals + next month's fixed bills; balance should stay above */
   floor: number | null;
 }
@@ -142,6 +144,20 @@ export interface RecurringCandidate {
   occurrences: number;
   last_seen: string;
   category_id: string | null;
+  cadence: "monthly" | "yearly";
+  /** yearly: month (1–12) it is charged in; monthly: null */
+  month_of_year: number | null;
+}
+
+/** A fixed charge expected in a month, and whether a transaction has paid it. */
+export interface ExpectedCharge {
+  recurring: Recurring;
+  /** YYYY-MM-DD: day_of_month clamped to the month length */
+  due_date: string;
+  status: "upcoming" | "due" | "paid" | "missed";
+  matched_txn_id: string | null;
+  /** matched transaction's |amount|, else the expected amount */
+  amount: number;
 }
 
 export interface BudgetModel {
@@ -337,6 +353,8 @@ export interface CategoryMonthDetail {
   /** (total − prev) / prev × 100, one decimal; null when prev is 0 */
   change_pct: number | null;
   parts: BreakdownPart[];
+  /** fixed charges of this category (or its subcategories) expected in the month */
+  expected: ExpectedCharge[];
 }
 
 export interface Allocation {

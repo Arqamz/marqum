@@ -2,10 +2,11 @@
  * Shared ledger math used by analytics, planning and close. Internal module: the public names are
  * re-exported from analytics.ts / planning.ts. Formulas are documented in docs/FORMULAS.md.
  */
-import type { AccountId, BalanceEntry, Goal, Loan, Transaction } from "@marqum/schema";
-import { isCf } from "./carry.ts";
+import type { AccountId, BalanceEntry, Goal, Loan, Recurring, Transaction } from "@marqum/schema";
+import { carryId, isCf } from "./carry.ts";
 import { numericSetting, trackingStart, trackingStartMonth } from "./dataset.ts";
-import { addMonths, completeMonthsBefore, monthOf } from "./time.ts";
+import { formatRs } from "./money.ts";
+import { addMonths, completeMonthsBefore, dayLabel, monthOf } from "./time.ts";
 import type { Dataset, GoalStatus, LoanStatus, WalletPosition } from "./types.ts";
 
 /** Non-deleted transactions on or after tracking start. Everything before tracking start does not exist. */
@@ -148,8 +149,55 @@ export function vaultFloor(ds: Dataset): number {
   let floor = 0;
   for (const v of env.values()) floor += Math.max(0, v);
   for (const r of ds.recurring)
-    if (!r.deleted && r.active && r.account_id === "sadapay") floor += Math.abs(r.amount);
+    if (!r.deleted && r.active && r.account_id === "sadapay") floor += monthlyEquivalent(r);
   return floor;
+}
+
+/** Monthly cost of a fixed charge: monthly = amount; yearly = amount / 12 (a sinking fund set aside monthly). */
+export const monthlyEquivalent = (r: Pick<Recurring, "amount" | "cadence">): number =>
+  r.cadence === "yearly" ? Math.round(Math.abs(r.amount) / 12) : Math.abs(r.amount);
+
+/** Balance you stated (manual entry) or the bank stated (notification "available balance"). */
+const isStatedBalance = (b: BalanceEntry) => b.source === "manual" || b.source === "notification";
+
+/** Latest manual/notification balance for the wallet on or after tracking start. */
+export const latestStatedBalance = (ds: Dataset, account: AccountId): BalanceEntry | undefined =>
+  assertions(ds, account).filter(isStatedBalance).at(-1);
+
+/**
+ * When the first tracked month's opening (b/f) is unknown and a balance was stated (by you or a notification),
+ * the opening that makes the ledger agree with it: stated − Σ ledger up to that instant (excluding the b/f).
+ */
+export function suggestOpeningBalance(
+  ds: Dataset,
+  accountId: AccountId,
+): { amount: number; from: string } | null {
+  const bf = ds.transactions.find(
+    (t) => t.id === carryId("bf", accountId, trackingStartMonth(ds)) && !t.deleted,
+  );
+  if (bf && bf.reason !== null) return null;
+  const stated = latestStatedBalance(ds, accountId);
+  if (!stated) return null;
+  const amount = stated.balance - (balanceAt(ds, accountId, stated.as_of) - (bf?.amount ?? 0));
+  return { amount, from: `${stated.source} ${dayLabel(stated.as_of)} ${stated.as_of.slice(11, 16)}` };
+}
+
+function unaccountedHint(
+  ds: Dataset,
+  account: AccountId,
+  name: string,
+  gap: number,
+  stated?: BalanceEntry,
+): string | null {
+  if (!stated || Math.abs(gap) <= 100) return null;
+  const opening = suggestOpeningBalance(ds, account);
+  if (opening)
+    return `Opening balance not set — set ${name}'s ${dayLabel(trackingStart(ds))} opening to ${formatRs(opening.amount, { decimals: true })}?`;
+  if (gap < 0)
+    return stated.source === "notification"
+      ? `${formatRs(-gap)} not in your notifications yet — likely fees or tax; your next statement will show it`
+      : `${formatRs(-gap)} spent that isn't recorded yet — add it, or wait for the statement`;
+  return `${formatRs(gap)} more than recorded — an incoming payment may be missing`;
 }
 
 export function walletPosition(ds: Dataset, account: AccountId): WalletPosition {
@@ -162,22 +210,22 @@ export function walletPosition(ds: Dataset, account: AccountId): WalletPosition 
     balance += t.amount;
     if (t.status !== "verified") provisional_delta += t.amount;
   }
-  const manual = assertions(ds, account)
-    .filter((b) => b.source === "manual")
-    .at(-1);
-  const unaccounted = manual ? manual.balance - balanceAt(ds, account, manual.as_of) : 0;
+  const stated = latestStatedBalance(ds, account);
+  const unaccounted = stated ? stated.balance - balanceAt(ds, account, stated.as_of) : 0;
+  const name = acc?.name ?? account;
   let verified_until: string | null = null;
   for (const s of ds.statements)
     if (!s.deleted && s.account_id === account && (verified_until === null || s.period_to > verified_until))
       verified_until = s.period_to;
   return {
     account_id: account,
-    name: acc?.name ?? account,
+    name,
     role,
     balance,
     verified_until,
     provisional_delta,
     unaccounted,
+    unaccounted_hint: unaccountedHint(ds, account, name, unaccounted, stated),
     floor: role === "vault" ? vaultFloor(ds) : null,
   };
 }

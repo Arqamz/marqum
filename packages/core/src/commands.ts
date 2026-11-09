@@ -32,7 +32,16 @@ import {
 } from "./dataset.ts";
 import { balanceAt, goalSaved } from "./ledger.ts";
 import { matchProvisional } from "./reconcile.ts";
-import { addDays, addMonths, dateOf, dayLabel, monthLabel, monthOf, monthRange } from "./time.ts";
+import {
+  addDays,
+  addMonths,
+  dateOf,
+  dayLabel,
+  minutesBetween,
+  monthLabel,
+  monthOf,
+  monthRange,
+} from "./time.ts";
 import type { CommandOutcome, Dataset, ExecContext, Mutation } from "./types.ts";
 
 type Outcome = CommandOutcome;
@@ -268,10 +277,16 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
   }
 
   const provisional = accTxns.filter((t) => t.status !== "verified");
+  const names: Record<string, string> = {};
+  for (const c of ds.counterparties) if (!c.deleted) names[c.id] = c.name;
   const pairs = matchProvisional(
     fresh.map((r) => ({ ...r, account_id: acc })),
     provisional,
+    names,
   );
+  const correctedIds = new Set(pairs.filter((p) => p.corrected).map((p) => p.txn_id));
+  const corrected: { txn_id: string; from: number; to: number }[] = [];
+  const fees: { external_id: string; near_txn_id: string }[] = [];
   const pairByExt = new Map(pairs.map((p) => [p.external_id, p.txn_id]));
   const matchedIds = new Set(pairs.map((p) => p.txn_id));
 
@@ -299,6 +314,7 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
     const prov = provId ? provisional.find((t) => t.id === provId) : undefined;
     if (prov) {
       matched++;
+      if (correctedIds.has(prov.id)) corrected.push({ txn_id: prov.id, from: prov.amount, to: r.amount });
       mutations.push(
         mut("transactions", {
           ...prov,
@@ -314,6 +330,16 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
       continue;
     }
     added++;
+    // a separate fee/tax row near a matched notification (e.g. foreign-card tax): report it next to that spend
+    if (c.flow === "fee") {
+      const near = pairs
+        .map((p) => provisional.find((t) => t.id === p.txn_id))
+        .filter((t): t is Transaction => t !== undefined)
+        .map((t) => ({ t, dt: Math.abs(minutesBetween(t.occurred_at, r.occurred_at)) }))
+        .filter((x) => x.dt <= 48 * 60)
+        .sort((a, b) => a.dt - b.dt)[0];
+      if (near) fees.push({ external_id: r.external_id, near_txn_id: near.t.id });
+    }
     const row: Transaction = {
       id: ctx.newId(),
       account_id: acc,
@@ -406,6 +432,8 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
     matched,
     disputed,
     ignored,
+    corrected,
+    fees,
     statement_id: statementId,
   });
 }
@@ -649,15 +677,29 @@ function mergeCounterparties(ds: Dataset, a: CommandArgs<"mergeCounterparties">,
 
 function upsertRecurring(ds: Dataset, a: CommandArgs<"upsertRecurring">): Outcome {
   if (a.amount === 0) return fail("invalid", "amount must not be zero");
-  const existing = ds.recurring.find((r) => r.id === a.recurring_id);
+  const existing = ds.recurring.find((r) => r.id === a.recurring_id && !r.deleted);
+  const source_txn_id = a.source_txn_id !== undefined ? a.source_txn_id : (existing?.source_txn_id ?? null);
+  const src = source_txn_id ? findTxn(ds, source_txn_id) : undefined;
+  if (source_txn_id && !src) return fail("invalid", `unknown transaction ${source_txn_id}`);
+  const cadence = a.cadence ?? existing?.cadence ?? "monthly";
+  let month_of_year = a.month_of_year !== undefined ? a.month_of_year : (existing?.month_of_year ?? null);
+  if (cadence === "yearly" && month_of_year === null)
+    month_of_year = src ? Number(src.occurred_at.slice(5, 7)) : null;
+  if (cadence === "yearly" && month_of_year === null)
+    return fail("invalid", "a yearly charge needs month_of_year");
   const row: Recurring = {
     id: a.recurring_id,
     name: a.name,
     account_id: a.account_id,
-    category_id: a.category_id,
-    counterparty_id: a.counterparty_id,
+    // created from a transaction: fill what the caller left empty from it
+    category_id: a.category_id ?? src?.category_id ?? null,
+    counterparty_id: a.counterparty_id ?? src?.counterparty_id ?? null,
     amount: Math.abs(a.amount),
     day_of_month: a.day_of_month,
+    cadence,
+    month_of_year: cadence === "yearly" ? month_of_year : null,
+    kind: a.kind ?? existing?.kind ?? "other",
+    source_txn_id,
     active: a.active,
     detected: existing?.detected ?? false,
     ...SYNC,

@@ -8,6 +8,7 @@ import {
   goalSaved,
   goalStatusOf,
   loanStatuses,
+  monthlyEquivalent,
   nextContributionMonth,
   nextPaymentMonth,
   openLoans,
@@ -93,7 +94,14 @@ export function plannedCategories(ds: Dataset, now: string, levers: Lever[] = []
 
 interface ModelParts {
   income: number;
-  recurring: { account_id: AccountId; name: string; amount: number }[];
+  /** amount = monthly equivalent (yearly ÷ 12); full = the charge itself; month_of_year for yearly */
+  recurring: {
+    account_id: AccountId;
+    name: string;
+    amount: number;
+    full: number;
+    yearly_in: number | null;
+  }[];
   installments: { name: string; amount: number }[];
   fixedUncovered: { category_id: string; name: string; amount: number; source: string }[];
   variableCats: { category_id: string; name: string; amount: number; source: string }[];
@@ -116,7 +124,9 @@ function modelParts(ds: Dataset, now: string, levers: Lever[] = []): ModelParts 
     recurring: activeRecurring(ds).map((r) => ({
       account_id: r.account_id,
       name: r.name,
-      amount: Math.abs(r.amount),
+      amount: monthlyEquivalent(r),
+      full: Math.abs(r.amount),
+      yearly_in: r.cadence === "yearly" ? r.month_of_year : null,
     })),
     installments: openLoans(ds, now).map((l) => ({
       name: `${l.loan.purpose} loan (${l.loan.lender})`,
@@ -137,10 +147,10 @@ function modelFromParts(ds: Dataset, p: ModelParts): BudgetModel {
   const floor = vaultFloor(ds);
   const free_savings = walletPosition(ds, "sadapay").balance - floor;
   const lines: BudgetModel["lines"] = [{ label: "Income into wallets", amount: p.income, kind: "income" }];
-  if (p.recurring.length)
+  for (const r of p.recurring)
     lines.push({
-      label: `Fixed charges (${p.recurring.length})`,
-      amount: sum(p.recurring),
+      label: r.yearly_in === null ? r.name : `${r.name} (yearly ÷ 12, set aside monthly)`,
+      amount: r.amount,
       kind: "committed",
     });
   for (const l of p.installments) lines.push({ label: l.name, amount: l.amount, kind: "committed" });
@@ -192,12 +202,19 @@ export function goalStatus(ds: Dataset, now: string): GoalStatus[] {
 export function suggestedSplit(ds: Dataset, now: string): SplitSuggestion {
   const p = modelParts(ds, now);
   const lines: SplitSuggestion["lines"] = [];
-  const sadaRecurring = p.recurring.filter((r) => r.account_id === "sadapay");
-  if (sadaRecurring.length)
+  const sadaMonthly = p.recurring.filter((r) => r.account_id === "sadapay" && r.yearly_in === null);
+  const sadaYearly = p.recurring.filter((r) => r.account_id === "sadapay" && r.yearly_in !== null);
+  if (sadaMonthly.length)
     lines.push({
       account_id: "sadapay",
-      label: `Fixed charges from SadaPay (${sadaRecurring.length})`,
-      amount: sum(sadaRecurring),
+      label: `Fixed charges from SadaPay (${sadaMonthly.length})`,
+      amount: sum(sadaMonthly),
+    });
+  if (sadaYearly.length)
+    lines.push({
+      account_id: "sadapay",
+      label: `Set aside for yearly charges (${sadaYearly.length})`,
+      amount: sum(sadaYearly),
     });
   for (const l of p.installments) lines.push({ account_id: "sadapay", label: l.name, amount: l.amount });
   if (p.goals.length)
@@ -360,7 +377,12 @@ function projectWith(ds: Dataset, now: string, a: ForecastAssumptions, extra: Pr
   const current = monthOf(now);
   const p = modelParts(ds, now, a.category_adjust);
   const baseIncome = p.income;
-  const fixed = sum(p.recurring) + sum(p.fixedUncovered);
+  // cash flow: monthly charges every month, yearly charges in full in their month (the plan shows them ÷ 12)
+  const monthlyFixed =
+    p.recurring.filter((r) => r.yearly_in === null).reduce((s, r) => s + r.amount, 0) + sum(p.fixedUncovered);
+  const fixedIn = (month: string) =>
+    monthlyFixed +
+    p.recurring.filter((r) => r.yearly_in === Number(month.slice(5, 7))).reduce((s, r) => s + r.full, 0);
   const variableExpected = Math.round(sum(p.variableCats) * (1 + a.spend_adjust_pct / 100));
   const spread = Math.round(variableSpread(ds, now, variableExpected, a.uncertainty));
   const variable = {
@@ -400,6 +422,7 @@ function projectWith(ds: Dataset, now: string, a: ForecastAssumptions, extra: Pr
       loansDue += d;
     }
     const one = oneOffs.filter((o) => o.month === month).reduce((s, o) => s + o.amount, 0);
+    const fixed = fixedIn(month);
     const base = income - fixed - goalsDue - loansDue + one;
     const surplus = {
       expected: base - variable.expected,
