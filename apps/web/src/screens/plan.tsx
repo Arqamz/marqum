@@ -3,11 +3,13 @@ import {
   budgetModel,
   type Dataset,
   detectRecurring,
+  expectedCharges,
   formatRs,
   goalStatus,
   karachiNow,
   loanStatus,
   monthLabel,
+  monthOf,
   parseRs,
   type RecurringCandidate,
   setting,
@@ -18,12 +20,22 @@ import { useEffect, useMemo, useState } from "react";
 import { CategoryIcon } from "../components/category-icon.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { Money } from "../components/money.tsx";
+import { RecurringForm } from "../components/recurring-form.tsx";
 import { Headline, Screen, Section } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Segmented, Skeleton, Slider } from "../components/ui/controls.tsx";
 import { Field, Input, MoneyInput } from "../components/ui/input.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
 import { cn } from "../lib/cn.ts";
+import { cadenceLabel, KIND_LABEL, kindFor, monthlyEquivalent } from "../lib/recurring.ts";
+
+const STATUS_LABEL = {
+  paid: "paid this month",
+  due: "due now",
+  upcoming: "upcoming",
+  missed: "missed",
+} as const;
+
 import { enqueue, newId } from "../lib/commands.ts";
 
 export function PlanScreen() {
@@ -88,7 +100,16 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
     return detectRecurring(ds).filter((c) => !c.counterparty_id || !tracked.has(c.counterparty_id));
   }, [ds]);
   const [edit, setEdit] = useState<Edit | null>(null);
-  const fixedTotal = fixed.reduce((sum, r) => sum + r.amount, 0);
+  const fixedTotal = fixed.reduce((sum, r) => sum + monthlyEquivalent(r), 0);
+  const yearly = fixed.filter((r) => r.cadence === "yearly");
+  const yearlyNote =
+    yearly.length > 0
+      ? `incl. ${yearly.map((r) => `${r.name} yearly as ${formatRs(monthlyEquivalent(r))}/month`).join(", ")}`
+      : null;
+  const status = useMemo(
+    () => new Map(expectedCharges(ds, monthOf(now), now).map((c) => [c.recurring.id, c])),
+    [ds, now],
+  );
   const tops = ds.categories
     .filter((c) => c.parent_id === null && (!c.hidden || c.budget))
     .sort((a, b) => a.sort - b.sort);
@@ -110,35 +131,64 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
         title="Fixed charges"
         aside={<span className="num text-sm text-fg-muted">{formatRs(fixedTotal)} a month</span>}
       >
+        {yearlyNote ? <p className="-mt-1 num text-sm text-fg-muted">{yearlyNote}</p> : null}
         <div className={card}>
           {fixed.length === 0 ? (
             <p className="text-sm text-fg-muted">
-              Bills, subscriptions and anything else that leaves every month. Add them so the plan knows.
+              Subscriptions, bills and anything else that leaves every month or year. Add them so the plan
+              knows.
             </p>
           ) : (
-            <ul className="-mx-2 flex flex-col" data-testid="fixed-charges">
-              {fixed.map((r) => (
-                <li key={r.id}>
-                  <button
-                    type="button"
-                    onClick={() => setEdit({ kind: "fixed", recurring: r })}
-                    className="flex w-full items-center gap-3 rounded-inner px-2 py-2 text-left hover:bg-surface-2"
-                  >
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate">{r.name}</span>
-                      <span className="text-sm text-fg-muted">
-                        {WALLET[r.account_id]} · day {r.day_of_month}
-                      </span>
-                    </span>
-                    <Money value={r.amount} className="font-medium" />
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="flex flex-col gap-4" data-testid="fixed-charges">
+              {(["subscription", "bill", "other"] as const)
+                .filter((k) => fixed.some((r) => r.kind === k))
+                .map((k) => (
+                  <div key={k} className="flex flex-col gap-1">
+                    <span className="text-sm text-fg-muted">{KIND_LABEL[k]}</span>
+                    <ul className="-mx-2 flex flex-col">
+                      {fixed
+                        .filter((r) => r.kind === k)
+                        .map((r) => {
+                          const st = status.get(r.id);
+                          return (
+                            <li key={r.id}>
+                              <button
+                                type="button"
+                                onClick={() => setEdit({ kind: "fixed", recurring: r })}
+                                className="flex w-full items-center gap-3 rounded-inner px-2 py-2 text-left hover:bg-surface-2"
+                              >
+                                <span className="flex min-w-0 flex-1 flex-col">
+                                  <span className="truncate">{r.name}</span>
+                                  <span className="text-sm text-fg-muted">
+                                    {cadenceLabel(r)} · day {r.day_of_month} · {WALLET[r.account_id]}
+                                    {st ? (
+                                      <>
+                                        {" · "}
+                                        <span
+                                          className={cn(
+                                            st.status === "paid" && "text-pos",
+                                            (st.status === "missed" || st.status === "due") && "text-warn",
+                                          )}
+                                        >
+                                          {STATUS_LABEL[st.status]}
+                                        </span>
+                                      </>
+                                    ) : null}
+                                  </span>
+                                </span>
+                                <Money value={r.amount} className="font-medium" />
+                              </button>
+                            </li>
+                          );
+                        })}
+                    </ul>
+                  </div>
+                ))}
+            </div>
           )}
           <Button variant="secondary" className="self-start" onClick={() => setEdit({ kind: "fixed" })}>
             <Plus aria-hidden />
-            Add fixed charge
+            Add subscription or bill
           </Button>
         </div>
         {candidates.length > 0 ? (
@@ -151,7 +201,8 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
                     {c.name}
                     <span className="text-fg-muted">
                       {" "}
-                      · {c.occurrences}× · around day {c.day_of_month}
+                      · {c.cadence === "yearly" ? "yearly · " : ""}
+                      {c.occurrences}× · around day {c.day_of_month}
                     </span>
                   </span>
                   <span className="flex items-center gap-3">
@@ -394,7 +445,7 @@ function PlanSheets({ ds, edit, onClose }: { ds: Dataset; edit: Edit | null; onC
           : edit?.kind === "move"
             ? `Move money for ${edit.goal.name}`
             : edit?.kind === "fixed"
-              ? (edit.recurring?.name ?? "Add a fixed charge")
+              ? (edit.recurring?.name ?? "Add a subscription or bill")
               : edit?.kind === "budget"
                 ? `${edit.category.name} budget`
                 : "";
@@ -405,111 +456,31 @@ function PlanSheets({ ds, edit, onClose }: { ds: Dataset; edit: Edit | null; onC
       {edit?.kind === "goal" ? <GoalForm goal={edit.goal} count={ds.goals.length} onDone={onClose} /> : null}
       {edit?.kind === "move" ? <MoveForm goal={edit.goal} onDone={onClose} /> : null}
       {edit?.kind === "fixed" ? (
-        <FixedForm ds={ds} recurring={edit.recurring} candidate={edit.candidate} onDone={onClose} />
+        <RecurringForm
+          ds={ds}
+          recurring={edit.recurring}
+          draft={
+            edit.candidate
+              ? {
+                  name: edit.candidate.name,
+                  amount: edit.candidate.amount,
+                  day_of_month: edit.candidate.day_of_month,
+                  account_id: edit.candidate.account_id,
+                  category_id: edit.candidate.category_id,
+                  counterparty_id: edit.candidate.counterparty_id,
+                  cadence: edit.candidate.cadence,
+                  month_of_year: edit.candidate.month_of_year,
+                  kind: kindFor(ds, edit.candidate.category_id),
+                }
+              : undefined
+          }
+          onDone={onClose}
+        />
       ) : null}
       {edit?.kind === "budget" ? (
         <BudgetForm category={edit.category} average={edit.average} onDone={onClose} />
       ) : null}
     </Sheet>
-  );
-}
-
-function FixedForm({
-  ds,
-  recurring,
-  candidate,
-  onDone,
-}: {
-  ds: Dataset;
-  recurring: Recurring | undefined;
-  candidate: RecurringCandidate | undefined;
-  onDone: () => void;
-}) {
-  const [name, setName] = useState(recurring?.name ?? candidate?.name ?? "");
-  const [amount, setAmount] = useState(rs(recurring?.amount ?? candidate?.amount));
-  const [day, setDay] = useState(String(recurring?.day_of_month ?? candidate?.day_of_month ?? 1));
-  const [wallet, setWallet] = useState<AccountId>(
-    recurring?.account_id ?? candidate?.account_id ?? "sadapay",
-  );
-  const [category, setCategory] = useState(recurring?.category_id ?? candidate?.category_id ?? "");
-  const a = parseRs(amount);
-  const d = Math.min(31, Math.max(1, Number.parseInt(day, 10) || 1));
-  const ok = name.trim() && a;
-  const cats = [...ds.categories].sort(
-    (x, y) => (x.parent_id ?? x.id).localeCompare(y.parent_id ?? y.id) || x.sort - y.sort,
-  );
-  return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!ok || !a) return;
-        void enqueue("upsertRecurring", {
-          recurring_id: recurring?.id ?? newId(),
-          name: name.trim(),
-          account_id: wallet,
-          category_id: category || null,
-          counterparty_id: recurring?.counterparty_id ?? candidate?.counterparty_id ?? null,
-          amount: Math.abs(a),
-          day_of_month: d,
-          active: true,
-        });
-        onDone();
-      }}
-    >
-      <Field label="Name">
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Electricity" />
-      </Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Amount">
-          <MoneyInput label="Amount" value={amount} onChange={setAmount} />
-        </Field>
-        <Field label="Day of month">
-          <Input
-            inputMode="numeric"
-            value={day}
-            onChange={(e) => setDay(e.target.value.replace(/\D/g, ""))}
-          />
-        </Field>
-      </div>
-      <Segmented
-        label="Wallet"
-        value={wallet}
-        onValueChange={setWallet}
-        options={[
-          { value: "sadapay", label: "SadaPay" },
-          { value: "nayapay", label: "NayaPay" },
-        ]}
-      />
-      <Field label="Category">
-        <select
-          className="h-12 rounded-control border border-border bg-surface px-3"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-        >
-          <option value="">None</option>
-          {cats.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.parent_id ? `${ds.categories.find((p) => p.id === c.parent_id)?.name} › ${c.name}` : c.name}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <Button type="submit" variant="primary" size="lg" disabled={!ok}>
-        {recurring ? "Save" : "Add fixed charge"}
-      </Button>
-      {recurring ? (
-        <Button
-          variant="danger"
-          onClick={() => {
-            void enqueue("deleteRecurring", { recurring_id: recurring.id });
-            onDone();
-          }}
-        >
-          Delete
-        </Button>
-      ) : null}
-    </form>
   );
 }
 

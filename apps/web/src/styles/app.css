@@ -176,3 +176,9 @@
   outline: 1.5px dashed var(--warn-line);
   outline-offset: -1.5px;
 }
+
+/* Expected fixed charges: dashed neutral until paid. */
+.expected-outline {
+  outline: 1.5px dashed var(--border-strong);
+  outline-offset: -1.5px;
+}

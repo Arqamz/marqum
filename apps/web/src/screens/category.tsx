@@ -11,15 +11,18 @@ import {
   monthOf,
 } from "@marqum/core";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
+import { AddToCategorySheet } from "../components/add-to-category.tsx";
 import { DailyBars, MonthlyBars } from "../components/charts.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
+import { ExpectedRows } from "../components/expected-list.tsx";
 import { Money } from "../components/money.tsx";
 import { MonthPager } from "../components/month-pager.tsx";
 import { Screen, Section } from "../components/shell.tsx";
 import { TagSheet } from "../components/tag-sheet.tsx";
 import { TxnList } from "../components/txn-list.tsx";
+import { Button } from "../components/ui/button.tsx";
 import { Skeleton } from "../components/ui/controls.tsx";
 import { cn } from "../lib/cn.ts";
 import { monthName } from "../lib/months.ts";
@@ -29,8 +32,24 @@ export function CategoryScreen({ id, month }: { id: string; month?: string | und
   const ds = useDataset();
   const now = useNow();
   const name = ds?.categories.find((c) => c.id === id)?.name;
+  const [adding, setAdding] = useState(false);
+  const category = ds?.categories.find((c) => c.id === id);
   return (
-    <Screen back {...(name ? { title: name } : {})}>
+    <Screen
+      back
+      {...(name ? { title: name } : {})}
+      actions={
+        category ? (
+          <Button variant="primary" size="sm" onClick={() => setAdding(true)} data-testid="category-add">
+            <Plus aria-hidden />
+            Add
+          </Button>
+        ) : null
+      }
+    >
+      {ds && category ? (
+        <AddToCategorySheet ds={ds} category={category} open={adding} onOpenChange={setAdding} />
+      ) : null}
       {ds ? (
         <CategoryContent ds={ds} now={now} id={id} month={month ?? monthOf(now)} />
       ) : (
@@ -89,8 +108,14 @@ function CategoryContent({ ds, now, id, month }: { ds: Dataset; now: string; id:
             <span className="num">{avg === null ? "no average yet" : `avg ${formatRs(avg)}`}</span>
             {detail.change_pct !== null ? (
               <span className="num inline-flex items-center gap-1">
-                {detail.change_pct >= 0 ? <ArrowUp aria-hidden /> : <ArrowDown aria-hidden />}
-                {Math.abs(detail.change_pct).toFixed(0)}% from {monthLabel(addMonths(month, -1)).slice(0, 3)}
+                {Math.round(detail.change_pct) === 0 ? null : detail.change_pct > 0 ? (
+                  <ArrowUp aria-hidden />
+                ) : (
+                  <ArrowDown aria-hidden />
+                )}
+                {Math.round(detail.change_pct) === 0
+                  ? `same as ${monthLabel(addMonths(month, -1)).slice(0, 3)}`
+                  : `${Math.abs(detail.change_pct).toFixed(0)}% from ${monthLabel(addMonths(month, -1)).slice(0, 3)}`}
               </span>
             ) : null}
             {current ? <span>so far this month</span> : null}
@@ -125,31 +150,34 @@ function CategoryContent({ ds, now, id, month }: { ds: Dataset; now: string; id:
       {detail.parts.length > 0 ? (
         <Section title={`${category.name} in ${monthName(month)}`}>
           <ul className="flex flex-col gap-4" data-testid="parts">
-            {detail.parts.map((p) => (
-              <li key={p.id} className="flex flex-col gap-2">
-                <div className="flex items-baseline justify-between gap-4 text-sm">
-                  <span className="min-w-0 truncate">{p.name}</span>
-                  <span className="flex items-baseline gap-3">
-                    <span className="num text-fg-muted">{Math.round(p.share * 100)}%</span>
-                    <Money value={p.spent} className="font-medium" />
-                  </span>
-                </div>
-                <div className="h-1.5 rounded-full bg-surface-2">
-                  <div
-                    className={cn("h-1.5 rounded-full bg-[var(--chart-bar-current)]")}
-                    style={{ width: `${Math.max(p.spent > 0 ? 2 : 0, p.share * 100)}%` }}
-                  />
-                </div>
-                {p.average ? (
-                  <span className="num text-sm text-fg-muted">avg {formatRs(p.average)}</span>
-                ) : null}
-              </li>
-            ))}
+            {detail.parts
+              .filter((p) => p.spent > 0 || (p.average ?? 0) > 0)
+              .map((p) => (
+                <li key={p.id} className="flex flex-col gap-2">
+                  <div className="flex items-baseline justify-between gap-4 text-sm">
+                    <span className="min-w-0 truncate">{p.name}</span>
+                    <span className="flex items-baseline gap-3">
+                      <span className="num text-fg-muted">{Math.round(p.share * 100)}%</span>
+                      <Money value={p.spent} className="font-medium" />
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-surface-2">
+                    <div
+                      className={cn("h-1.5 rounded-full bg-[var(--chart-bar-current)]")}
+                      style={{ width: `${Math.max(p.spent > 0 ? 2 : 0, p.share * 100)}%` }}
+                    />
+                  </div>
+                  {p.average ? (
+                    <span className="num text-sm text-fg-muted">avg {formatRs(p.average)}</span>
+                  ) : null}
+                </li>
+              ))}
           </ul>
         </Section>
       ) : null}
 
       <Section title="Transactions">
+        <ExpectedRows charges={detail.expected} onOpenTxn={(id) => setOpen(id)} />
         {txns.length > 0 ? (
           <TxnList
             txns={txns}
@@ -158,11 +186,12 @@ function CategoryContent({ ds, now, id, month }: { ds: Dataset; now: string; id:
             onOpen={(t) => setOpen(t.id)}
             isClosedMonth={(m) => isClosed(ds, m)}
           />
-        ) : (
+        ) : detail.expected.length === 0 ? (
           <p className="text-fg-muted">
-            Nothing on {category.name.toLowerCase()} in {monthName(month)}.
+            Nothing on {category.name.toLowerCase()} in {monthName(month)}. Add a transaction or a
+            subscription with Add.
           </p>
-        )}
+        ) : null}
       </Section>
       <TagSheet
         txn={open ? (ds.transactions.find((t) => t.id === open) ?? null) : null}

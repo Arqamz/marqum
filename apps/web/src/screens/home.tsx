@@ -8,6 +8,7 @@ import {
   monthLedger,
   monthOf,
   netPosition,
+  suggestOpeningBalance,
   unverifiedSummary,
 } from "@marqum/core";
 import { Link } from "@tanstack/react-router";
@@ -18,10 +19,13 @@ import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { HeroAmount, Money, TweenMoney } from "../components/money.tsx";
 import { openQuickAdd } from "../components/quick-add.tsx";
 import { Screen } from "../components/shell.tsx";
+import { Button } from "../components/ui/button.tsx";
 import { Skeleton } from "../components/ui/controls.tsx";
 import { WhatIfCard } from "../components/what-if.tsx";
 import { cn } from "../lib/cn.ts";
+import { enqueue } from "../lib/commands.ts";
 import { isNative } from "../lib/platform.ts";
+import { firstTrackedMonth } from "../lib/tracking.ts";
 
 export function HomeScreen() {
   const ds = useDataset();
@@ -136,6 +140,9 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
                 {below && w.floor !== null ? (
                   <span className="num text-warn">{formatRs(w.floor - w.balance)} below floor</span>
                 ) : null}
+                {w.unaccounted_hint && !suggestOpeningBalance(ds, w.account_id) ? (
+                  <span className="text-fg-muted">{w.unaccounted_hint}</span>
+                ) : null}
                 {w.provisional_delta !== 0 ? (
                   <span className="num text-warn">
                     {formatRs(w.provisional_delta, { sign: true })} unverified
@@ -150,6 +157,8 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
           );
         })}
       </section>
+
+      <OpeningSuggestions ds={ds} />
 
       {unverified.count > 0 ? (
         <Link
@@ -220,5 +229,53 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
         <WhatIfCard ds={ds} now={now} />
       </section>
     </>
+  );
+}
+
+/**
+ * One-tap fix for an unset opening balance: a stated balance (typed, or from a SadaPay notification) implies what
+ * the first tracked month must have opened with. Shown only until the opening is set.
+ */
+function OpeningSuggestions({ ds }: { ds: Dataset }) {
+  const start = firstTrackedMonth(ds);
+  const items = ds.accounts
+    .map((a) => {
+      const s = suggestOpeningBalance(ds, a.id);
+      if (!s) return null;
+      const stated = ds.balances
+        .filter((b) => b.account_id === a.id && (b.source === "manual" || b.source === "notification"))
+        .sort((x, y) => x.as_of.localeCompare(y.as_of))
+        .at(-1);
+      return { account: a, suggestion: s, stated };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+  if (items.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-3" aria-label="Opening balances">
+      {items.map(({ account, suggestion, stated }) => (
+        <div
+          key={account.id}
+          className="flex flex-col gap-3 rounded-card bg-surface p-4"
+          data-testid="opening-suggestion"
+        >
+          <p className="num text-sm">
+            {stated
+              ? `${account.name}'s balance on ${dayLabel(stated.as_of.slice(0, 10))} was ${formatRs(stated.balance, { decimals: true })}`
+              : `${account.name}'s stated balance`}{" "}
+            → your 1 {monthLabel(start)} opening was {formatRs(suggestion.amount, { decimals: true })}. Set
+            it?
+          </p>
+          <Button
+            variant="secondary"
+            className="self-start"
+            onClick={() =>
+              void enqueue("setOpeningBalance", { account_id: account.id, amount: suggestion.amount })
+            }
+          >
+            Set {account.name} opening to {formatRs(suggestion.amount, { decimals: true })}
+          </Button>
+        </div>
+      ))}
+    </section>
   );
 }

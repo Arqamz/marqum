@@ -1,6 +1,8 @@
 import {
+  addDays,
   availableMonths,
   type Dataset,
+  expectedCharges,
   formatRs,
   isClosed,
   monthLabel,
@@ -12,6 +14,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Plus, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
+import { ExpectedRows } from "../components/expected-list.tsx";
 import { openQuickAdd } from "../components/quick-add.tsx";
 import { Headline, Screen } from "../components/shell.tsx";
 import { TagSheet } from "../components/tag-sheet.tsx";
@@ -101,6 +104,16 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
   const spent = rows.reduce((s, t) => s + (t.flow === "spend" || t.flow === "fee" ? -t.amount : 0), 0);
   const untagged = rows.filter(needsTag).length;
   const disputed = rows.filter((t) => t.status === "disputed");
+  // Fixed charges due now or within the week, on the plain current-month view.
+  const soon = useMemo(() => {
+    if (month !== current || search.filter || search.q || search.cp || search.category) return [];
+    const weekOut = addDays(now.slice(0, 10), 7);
+    return expectedCharges(ds, current, now).filter(
+      (c) =>
+        (!search.wallet || c.recurring.account_id === search.wallet) &&
+        (c.status === "due" || (c.status === "upcoming" && c.due_date <= weekOut)),
+    );
+  }, [ds, now, month, current, search]);
   const months = useMemo(() => [...availableMonths(ds, now)].reverse(), [ds, now]);
   const txn = open ? (ds.transactions.find((t) => t.id === open) ?? null) : null;
   const cpName = search.cp ? l.counterparty.get(search.cp)?.name : undefined;
@@ -182,6 +195,13 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
           ) : null}
         </div>
       </div>
+
+      {soon.length > 0 ? (
+        <section className="flex flex-col gap-1" aria-label="Expected this week">
+          <h3 className="text-sm text-fg-muted">Expected this week</h3>
+          <ExpectedRows charges={soon} />
+        </section>
+      ) : null}
 
       {disputed.length > 0 ? (
         <section

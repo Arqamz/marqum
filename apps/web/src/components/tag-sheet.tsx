@@ -1,16 +1,27 @@
-import { classify, counterpartyKey, type Dataset, dayLabel, formatRs, isClosed, monthOf } from "@marqum/core";
+import {
+  classify,
+  counterpartyKey,
+  type Dataset,
+  dayLabel,
+  formatRs,
+  isClosed,
+  monthLabel,
+  monthOf,
+  parseRs,
+} from "@marqum/core";
 import type { Flow, Transaction } from "@marqum/schema";
 import { Lock } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { enqueue } from "../lib/commands.ts";
+import { enqueue, newId } from "../lib/commands.ts";
 import { monthName } from "../lib/months.ts";
+import { kindFor } from "../lib/recurring.ts";
 import { stepUp } from "../lib/stepup.ts";
 import { escapeRegex, FLOW_LABEL, IN_FLOWS, lookup, OUT_FLOWS, timeOf, txnTitle } from "../lib/view.ts";
 import { CategoryPicker } from "./category-picker.tsx";
 import { useDataset } from "./dataset-provider.tsx";
 import { Button } from "./ui/button.tsx";
-import { Chip, Switch } from "./ui/controls.tsx";
-import { Field, Input } from "./ui/input.tsx";
+import { Chip, Segmented, Switch } from "./ui/controls.tsx";
+import { Field, Input, MoneyInput } from "./ui/input.tsx";
 import { Sheet } from "./ui/sheet.tsx";
 
 /** Tag a transaction: reason (suggests a category as you type), category, flow, links, "always". */
@@ -44,6 +55,9 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
   const [remember, setRemember] = useState(false);
   const [saving, setSaving] = useState(false);
   const closed = isClosed(ds, monthOf(txn.occurred_at));
+  const backing = ds.recurring.find((r) => r.source_txn_id === txn.id && r.active);
+  const [repeats, setRepeats] = useState<"no" | "monthly" | "yearly">(backing?.cadence ?? "no");
+  const [repeatAmount, setRepeatAmount] = useState(String((backing?.amount ?? Math.abs(txn.amount)) / 100));
 
   const suggestion = useMemo(
     () =>
@@ -77,6 +91,31 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
   const l = lookup(ds);
   const showCategory = flow === "spend" || flow === "fee" || flow === "reimbursement";
 
+  /** "Repeats" turns this transaction into (or out of) a fixed charge. */
+  async function saveRepeat() {
+    if (txn.amount >= 0) return;
+    if (repeats === "no") {
+      if (backing) await enqueue("deleteRecurring", { recurring_id: backing.id });
+      return;
+    }
+    const amount = parseRs(repeatAmount) ?? Math.abs(txn.amount);
+    const cat = showCategory ? category : txn.category_id;
+    await enqueue("upsertRecurring", {
+      recurring_id: backing?.id ?? newId(),
+      name: backing?.name ?? (reason.trim() || txnTitle(txn, lookup(ds))),
+      account_id: txn.account_id,
+      category_id: cat,
+      counterparty_id: txn.counterparty_id,
+      amount: Math.abs(amount),
+      day_of_month: Number(txn.occurred_at.slice(8, 10)),
+      active: true,
+      cadence: repeats,
+      month_of_year: repeats === "yearly" ? Number(txn.occurred_at.slice(5, 7)) : null,
+      kind: backing?.kind ?? kindFor(ds, cat),
+      source_txn_id: txn.id,
+    });
+  }
+
   async function save() {
     setSaving(true);
     try {
@@ -84,6 +123,7 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
         const ok = await stepUp(`${monthName(monthOf(txn.occurred_at))} is closed`);
         if (!ok) return;
       }
+      await saveRepeat();
       await enqueue("tagTransaction", {
         txn_id: txn.id,
         reason: reason.trim() || null,
@@ -115,6 +155,11 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
         <p className="flex items-center gap-2 rounded-control bg-surface-2 px-4 py-3 text-sm text-fg-muted">
           <Lock className="shrink-0" aria-hidden />
           {monthName(monthOf(txn.occurred_at))} is closed — saving asks for your fingerprint.
+        </p>
+      ) : null}
+      {txn.source === "notification" && txn.status !== "verified" ? (
+        <p className="-mt-2 text-sm text-warn" data-testid="from-notification">
+          From notification · amount may change (fees/tax)
         </p>
       ) : null}
       {txn.description ? (
@@ -185,6 +230,39 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
             ))}
           </select>
         </Field>
+      ) : null}
+
+      {txn.amount < 0 && (flow === "spend" || flow === "fee") ? (
+        <div className="flex flex-col gap-2" data-testid="repeats">
+          <span className="text-sm text-fg-muted">
+            Repeats
+            {backing
+              ? ` — tracked as a ${backing.cadence} ${backing.kind === "other" ? "charge" : backing.kind}`
+              : ""}
+          </span>
+          <Segmented
+            label="Repeats"
+            value={repeats}
+            onValueChange={setRepeats}
+            options={[
+              { value: "no", label: "Once" },
+              { value: "monthly", label: "Monthly" },
+              { value: "yearly", label: "Yearly" },
+            ]}
+          />
+          {repeats !== "no" ? (
+            <div className="flex flex-col gap-1">
+              <MoneyInput label="Expected amount" value={repeatAmount} onChange={setRepeatAmount} />
+              <span className="text-sm text-fg-muted">
+                Expected{" "}
+                {repeats === "yearly"
+                  ? `every ${monthLabel(monthOf(txn.occurred_at)).slice(0, 3)}`
+                  : "every month"}{" "}
+                on day {Number(txn.occurred_at.slice(8, 10))}
+              </span>
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       {!closed && pattern ? (

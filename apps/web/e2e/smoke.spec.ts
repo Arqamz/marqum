@@ -99,6 +99,40 @@ for (const scheme of ["light", "dark"] as const) {
     await page.getByRole("button", { name: /Next month/ }).click();
     await expect(page.getByTestId("pager-month")).toHaveText("Nov 2026");
 
+    // Category › Add › Subscription or bill: typed in by hand, expected until charged
+    await page.goto("/#/category/subscriptions");
+    await page.getByTestId("category-add").click();
+    const add = page.getByTestId("add-to-category");
+    await add.getByRole("radio", { name: "Subscription or bill" }).click();
+    await add.getByLabel("Name").fill("Spotify");
+    await add.getByLabel("Amount").fill("300");
+    await add.getByLabel("Day of month").fill("15");
+    await shot("category-add");
+    await add.getByRole("button", { name: "Add subscription" }).click();
+    await expect(page.getByTestId("expected-row").filter({ hasText: "Spotify" })).toContainText(
+      "Expected · due 15 Nov",
+    );
+    await expect
+      .poll(() => world.server.log.some((c) => c.name === "upsertRecurring" && c.args.name === "Spotify"))
+      .toBe(true);
+    await page.getByTestId("expected-rows").scrollIntoViewIfNeeded();
+    await shot("category-expected");
+
+    // Mark a transaction as a yearly charge from its tag sheet
+    await page.goto("/#/activity");
+    await page.getByTestId("txn-row").filter({ hasText: "Apple Com Bill" }).first().click();
+    await page.getByTestId("repeats").getByRole("radio", { name: "Yearly" }).click();
+    await shot("tag-repeats");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect
+      .poll(() =>
+        world.server.log.some(
+          (c) =>
+            c.name === "upsertRecurring" && c.args.cadence === "yearly" && c.args.source_txn_id !== undefined,
+        ),
+      )
+      .toBe(true);
+
     // Import a synthetic statement: warm rows become verified
     await page.goto("/#/import");
     await page.getByTestId("file-input").setInputFiles({
@@ -149,11 +183,14 @@ for (const scheme of ["light", "dark"] as const) {
     await page.goto("/#/plan");
     await expect(page.getByRole("heading", { level: 1 })).toContainText("a month");
     await expect(page.getByTestId("allocation")).toContainText("SadaPay");
+    await expect(page.getByTestId("fixed-charges")).toContainText("Yearly · Nov");
+    await expect(page.getByTestId("fixed-charges")).toContainText("Spotify");
     await shot("plan");
-    await page.getByRole("button", { name: "Add fixed charge" }).click();
+    await page.getByRole("button", { name: "Add subscription or bill" }).click();
     await page.getByLabel("Name").fill("Internet");
     await page.getByRole("dialog").getByLabel("Amount").fill("3500");
-    await page.getByRole("dialog").getByRole("button", { name: "Add fixed charge" }).click();
+    await page.getByRole("dialog").getByRole("radio", { name: "Bill" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Add bill" }).click();
     await expect(page.getByTestId("fixed-charges")).toContainText("Internet");
     await page.getByTestId("budgets").scrollIntoViewIfNeeded();
     await shot("plan-budgets");
