@@ -51,7 +51,8 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(page.getByTestId("debt-line")).toContainText(
       /In debt · owe Mom Rs 60,000 · clear by \w{3} 2027 at Rs 15,000\/month/,
     );
-    await expect(hero.locator(".text-neg")).toHaveCount(1); // positive net stays ink; only the debt line is red
+    await expect(hero.locator(".text-neg")).toHaveCount(2); // in debt: the net position and the debt line are red
+    await expect(page.locator("html")).toHaveAttribute("data-debt", "1");
     await expect(page.getByTestId("unverified-banner")).toContainText("2 unverified");
     await expect(page.getByTestId("category-card").first()).toBeVisible();
     await expect(page.getByTestId("sync-state")).toHaveAttribute("data-status", "synced");
@@ -88,16 +89,20 @@ for (const scheme of ["light", "dark"] as const) {
       .poll(() => world.server.log.some((c) => c.name === "tagTransaction" && c.args.txn_id === "warm-1"))
       .toBe(true);
 
-    // Category detail (Screen Time style): month total, days, year, parts, rows
+    // Category detail: period total, one chart (Month / 6 months / Year), stats, rows
     await page.goto("/#/category/car?month=2026-10");
     await expect(page.getByTestId("pager-month")).toHaveText("Oct 2026");
     await expect(page.getByTestId("category-total")).toContainText("avg Rs");
     await expect(page.getByTestId("daily-bars")).toBeVisible();
-    await expect(page.getByTestId("monthly-bars")).toBeVisible();
-    await expect(page.getByTestId("parts")).toContainText("Petrol");
+    await expect(page.getByTestId("category-stats")).toContainText("Per day");
     await shot("category");
-    await page.getByRole("button", { name: /Next month/ }).click();
+    await page.getByTestId("category-chart").press("ArrowRight");
     await expect(page.getByTestId("pager-month")).toHaveText("Nov 2026");
+    await page.getByRole("radio", { name: "6 months" }).click();
+    await expect(page.getByTestId("monthly-bars")).toBeVisible();
+    await expect(page.getByTestId("pager-month")).toHaveText("Jun – Nov 2026");
+    await expect(page.getByTestId("category-stats")).toContainText("Per month");
+    await shot("category-6m");
 
     // Category › Add › Subscription or bill: typed in by hand, expected until charged
     await page.goto("/#/category/subscriptions");

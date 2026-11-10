@@ -40,25 +40,31 @@ function WalletDot({ id }: { id: Transaction["account_id"] }) {
   );
 }
 
-/** Direction at a glance: in (green ↙), out (muted ↗), between own wallets (⇄). */
-function Amount({ t }: { t: Transaction }) {
+/** Direction at a glance, in front of the description line: in (green ↙), out (↗), between own wallets (⇄). */
+function Direction({ t }: { t: Transaction }) {
   const internal = t.flow === "internal";
   const inflow = !internal && t.amount > 0;
   const Icon = internal ? ArrowLeftRight : inflow ? ArrowDownLeft : ArrowUpRight;
   return (
-    <HStack gap={1} vAlign="center">
-      <Icon
-        size={14}
-        className={cn("shrink-0", inflow ? "text-pos" : "text-fg-subtle")}
-        aria-label={internal ? "Between wallets" : inflow ? "In" : "Out"}
-      />
-      <Money
-        value={t.amount}
-        sign={t.amount > 0}
-        className="font-medium"
-        {...opt({ tone: inflow ? ("pos" as const) : internal ? ("muted" as const) : undefined })}
-      />
-    </HStack>
+    <Icon
+      size={12}
+      strokeWidth={2.25}
+      className={cn("shrink-0", inflow ? "text-pos" : "text-fg-subtle")}
+      aria-label={internal ? "Between wallets" : inflow ? "In" : "Out"}
+    />
+  );
+}
+
+/** The amount, unsigned: direction is the arrow on the left; money in is green. */
+function Amount({ t }: { t: Transaction }) {
+  const internal = t.flow === "internal";
+  const inflow = !internal && t.amount > 0;
+  return (
+    <Money
+      value={Math.abs(t.amount)}
+      className="font-medium"
+      {...opt({ tone: inflow ? ("pos" as const) : internal ? ("muted" as const) : undefined })}
+    />
   );
 }
 
@@ -135,7 +141,14 @@ function EntryRow({ t, l, onOpen, closed, link, stamp }: RowProps) {
           title
         )
       }
-      description={sub}
+      description={
+        <HStack gap={1} vAlign="center">
+          <Direction t={t} />
+          <Text type="supporting" maxLines={1} hasTruncateTooltip={false}>
+            {sub || (t.amount > 0 ? "In" : "Out")}
+          </Text>
+        </HStack>
+      }
       startContent={
         <span
           className={cn(

@@ -1,6 +1,7 @@
 import { Badge } from "@astryxdesign/core/Badge";
 import { Card } from "@astryxdesign/core/Card";
 import { ClickableCard } from "@astryxdesign/core/ClickableCard";
+import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -37,7 +38,7 @@ import { Money } from "../components/money.tsx";
 import { RecurringForm } from "../components/recurring-form.tsx";
 import { Screen } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
-import { Segmented, Skeleton } from "../components/ui/controls.tsx";
+import { Skeleton } from "../components/ui/controls.tsx";
 import { Field, Input, MoneyInput } from "../components/ui/input.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
 import { enqueue, newId } from "../lib/commands.ts";
@@ -91,7 +92,7 @@ type Edit =
   | { kind: "income" }
   | { kind: "loan"; loan?: Loan }
   | { kind: "goal"; goal?: Goal }
-  | { kind: "move"; goal: Goal }
+  | { kind: "move"; goal: Goal; dir: "in" | "out" }
   | { kind: "fixed"; recurring?: Recurring; candidate?: RecurringCandidate }
   | { kind: "budget"; category: Category; basis: Basis | null };
 
@@ -99,7 +100,7 @@ type Edit =
 type Basis = { amount: number; source: "average" | "estimate" };
 
 const basisText = (b: Basis) =>
-  b.source === "average" ? `avg ${formatRs(b.amount)}` : `~${formatRs(b.amount)}/mo at your daily rate`;
+  b.source === "average" ? `avg ${formatRs(b.amount)}` : `~${formatRs(b.amount)} est.`;
 
 const WALLET: Record<AccountId, string> = { sadapay: "SadaPay", nayapay: "NayaPay" };
 
@@ -133,6 +134,7 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
         out.set(c.category_id, { amount: c.planned, source: c.source });
     return out;
   }, [ds, now]);
+  const budgetTotal = tops.reduce((sum, c) => sum + (planned.get(c.id)?.planned ?? 0), 0);
   const kinds = (Object.keys(KIND_LABEL) as RecurringKind[]).filter((k) => fixed.some((r) => r.kind === k));
 
   return (
@@ -229,38 +231,6 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
         ) : null}
       </Block>
 
-      <Block title="Monthly budgets">
-        <Card>
-          <List edge="outset" hasDividers data-testid="budgets">
-            {tops.map((c) => {
-              const pc = planned.get(c.id);
-              const basis = baseline.get(c.id) ?? null;
-              return (
-                <ListItem
-                  key={c.id}
-                  startContent={<CategoryIcon name={c.icon} className="shrink-0 text-fg-muted" />}
-                  label={c.name}
-                  description={
-                    pc?.source === "recurring" ? "Fixed charges" : basis ? basisText(basis) : "No history"
-                  }
-                  endContent={
-                    <HStack gap={2} vAlign="center">
-                      {c.budget ? (
-                        <Money value={c.budget} className="font-medium" />
-                      ) : (
-                        <Text type="supporting">Set</Text>
-                      )}
-                      <ChevronRight className="shrink-0 text-fg-subtle" aria-hidden />
-                    </HStack>
-                  }
-                  onClick={() => setEdit({ kind: "budget", category: c, basis })}
-                />
-              );
-            })}
-          </List>
-        </Card>
-      </Block>
-
       <Block
         title="Goals"
         aside={
@@ -286,11 +256,8 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
                     <ListItem
                       startContent={<CategoryIcon name={g.goal.icon} className="text-fg-muted" />}
                       label={g.goal.name}
-                      endContent={
-                        <Text hasTabularNumbers>
-                          {formatRs(g.saved)} <Text color="secondary">/ {formatRs(g.goal.target)}</Text>
-                        </Text>
-                      }
+                      description={`${formatRs(g.saved)} of ${formatRs(g.goal.target)}`}
+                      endContent={<ChevronRight className="shrink-0 text-fg-subtle" aria-hidden />}
                       onClick={() => setEdit({ kind: "goal", goal: g.goal })}
                     />
                   </List>
@@ -301,15 +268,23 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
                     variant={done ? "success" : "accent"}
                   />
                   <HStack justify="between" vAlign="center" gap={4}>
-                    {done ? (
-                      <Badge label="Reached" variant="success" />
-                    ) : (
-                      <Text type="supporting" hasTabularNumbers>
-                        {formatRs(g.goal.monthly)}/mo · {g.eta_month ? monthLabel(g.eta_month) : "no date"}
-                      </Text>
-                    )}
-                    <Button variant="text" size="sm" onClick={() => setEdit({ kind: "move", goal: g.goal })}>
-                      Move money
+                    <StackItem size="fill">
+                      {done ? (
+                        <Badge label="Reached" variant="success" />
+                      ) : (
+                        <Text type="supporting" hasTabularNumbers>
+                          {formatRs(g.goal.monthly)}/month
+                          {g.eta_month ? ` · ready by ${monthLabel(g.eta_month)}` : ""}
+                        </Text>
+                      )}
+                    </StackItem>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<Plus aria-hidden />}
+                      onClick={() => setEdit({ kind: "move", goal: g.goal, dir: "in" })}
+                    >
+                      Add money
                     </Button>
                   </HStack>
                 </VStack>
@@ -376,10 +351,51 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
             );
           })
         )}
-        <Text type="supporting">Tag transfers “Loan repayment” to count them.</Text>
       </Block>
 
-      <PlanSheets ds={ds} now={now} edit={edit} onClose={() => setEdit(null)} />
+      <Card data-testid="budgets">
+        <Collapsible
+          defaultIsOpen={false}
+          trigger={
+            <HStack gap={3} vAlign="center" wrap="wrap">
+              <Heading level={2}>Monthly budgets</Heading>
+              <Text type="supporting" hasTabularNumbers>
+                {tops.length} categories · {formatRs(budgetTotal)}/mo
+              </Text>
+            </HStack>
+          }
+        >
+          <List edge="outset" hasDividers>
+            {tops.map((c) => {
+              const pc = planned.get(c.id);
+              const basis = baseline.get(c.id) ?? null;
+              return (
+                <ListItem
+                  key={c.id}
+                  startContent={<CategoryIcon name={c.icon} className="shrink-0 text-fg-muted" />}
+                  label={c.name}
+                  description={
+                    pc?.source === "recurring" ? "Fixed charges" : basis ? basisText(basis) : "No history"
+                  }
+                  endContent={
+                    <HStack gap={2} vAlign="center">
+                      {c.budget ? (
+                        <Money value={c.budget} className="font-medium" />
+                      ) : (
+                        <Text type="supporting">Set</Text>
+                      )}
+                      <ChevronRight className="shrink-0 text-fg-subtle" aria-hidden />
+                    </HStack>
+                  }
+                  onClick={() => setEdit({ kind: "budget", category: c, basis })}
+                />
+              );
+            })}
+          </List>
+        </Collapsible>
+      </Card>
+
+      <PlanSheets ds={ds} now={now} edit={edit} onEdit={setEdit} onClose={() => setEdit(null)} />
     </>
   );
 }
@@ -433,7 +449,7 @@ function MoneySection({ ds, now, onIncome }: { ds: Dataset; now: string; onIncom
           <List edge="outset" density="compact" hasDividers>
             {split.lines.map((l) => (
               <ListItem
-                key={`${l.account_id}-${l.label}`}
+                key={`${l.account_id}-${l.label}-${l.amount}`}
                 label={l.label}
                 description={WALLET[l.account_id]}
                 endContent={<Money value={l.amount} tone="muted" />}
@@ -488,11 +504,13 @@ function PlanSheets({
   ds,
   now,
   edit,
+  onEdit,
   onClose,
 }: {
   ds: Dataset;
   now: string;
   edit: Edit | null;
+  onEdit: (e: Edit) => void;
   onClose: () => void;
 }) {
   const title =
@@ -505,7 +523,7 @@ function PlanSheets({
         : edit?.kind === "goal"
           ? (edit.goal?.name ?? "New goal")
           : edit?.kind === "move"
-            ? `Move money · ${edit.goal.name}`
+            ? `${edit.dir === "in" ? "Add money" : "Take money out"} · ${edit.goal.name}`
             : edit?.kind === "fixed"
               ? (edit.recurring?.name ?? "Add a subscription or bill")
               : edit?.kind === "budget"
@@ -515,8 +533,17 @@ function PlanSheets({
     <Sheet open={edit !== null} onOpenChange={(o) => !o && onClose()} title={title} purpose="form">
       {edit?.kind === "income" ? <IncomeList ds={ds} now={now} /> : null}
       {edit?.kind === "loan" ? <LoanForm loan={edit.loan} onDone={onClose} /> : null}
-      {edit?.kind === "goal" ? <GoalForm goal={edit.goal} count={ds.goals.length} onDone={onClose} /> : null}
-      {edit?.kind === "move" ? <MoveForm goal={edit.goal} onDone={onClose} /> : null}
+      {edit?.kind === "goal" ? (
+        <GoalForm
+          goal={edit.goal}
+          count={ds.goals.length}
+          onDone={onClose}
+          onTakeOut={(goal) => onEdit({ kind: "move", goal, dir: "out" })}
+        />
+      ) : null}
+      {edit?.kind === "move" ? (
+        <MoveForm key={edit.dir} goal={edit.goal} dir={edit.dir} onDone={onClose} />
+      ) : null}
       {edit?.kind === "fixed" ? (
         <RecurringForm
           ds={ds}
@@ -663,7 +690,17 @@ function LoanForm({ loan, onDone }: { loan: Loan | undefined; onDone: () => void
   );
 }
 
-function GoalForm({ goal, count, onDone }: { goal: Goal | undefined; count: number; onDone: () => void }) {
+function GoalForm({
+  goal,
+  count,
+  onDone,
+  onTakeOut,
+}: {
+  goal: Goal | undefined;
+  count: number;
+  onDone: () => void;
+  onTakeOut: (goal: Goal) => void;
+}) {
   const [name, setName] = useState(goal?.name ?? "");
   const [target, setTarget] = useState(rs(goal?.target));
   const [monthly, setMonthly] = useState(rs(goal?.monthly));
@@ -688,7 +725,7 @@ function GoalForm({ goal, count, onDone }: { goal: Goal | undefined; count: numb
       <TextInput label="Name" value={name} onChange={setName} placeholder="New laptop" width="100%" />
       <MoneyInput label="Target" value={target} onChange={setTarget} />
       <MoneyInput
-        label="Set aside each month"
+        label="Each month"
         value={monthly}
         onChange={setMonthly}
         {...(t && m ? { description: `About ${Math.ceil(t / m)} months` } : {})}
@@ -696,6 +733,7 @@ function GoalForm({ goal, count, onDone }: { goal: Goal | undefined; count: numb
       <Button type="submit" variant="primary" size="lg" disabled={!name.trim() || !t || m === null}>
         {goal ? "Save goal" : "Add goal"}
       </Button>
+      {goal ? <Button onClick={() => onTakeOut(goal)}>Take money out</Button> : null}
       {goal ? (
         <Button
           variant="danger"
@@ -711,9 +749,8 @@ function GoalForm({ goal, count, onDone }: { goal: Goal | undefined; count: numb
   );
 }
 
-function MoveForm({ goal, onDone }: { goal: Goal; onDone: () => void }) {
-  const [dir, setDir] = useState<"in" | "out">("in");
-  const [amount, setAmount] = useState(rs(goal.monthly));
+function MoveForm({ goal, dir, onDone }: { goal: Goal; dir: "in" | "out"; onDone: () => void }) {
+  const [amount, setAmount] = useState(dir === "in" ? rs(goal.monthly) : "");
   const a = parseRs(amount);
   return (
     <Form
@@ -729,24 +766,9 @@ function MoveForm({ goal, onDone }: { goal: Goal; onDone: () => void }) {
         onDone();
       }}
     >
-      <Segmented
-        label="Direction"
-        value={dir}
-        onValueChange={setDir}
-        options={[
-          { value: "in", label: "Set aside" },
-          { value: "out", label: "Release" },
-        ]}
-      />
-      <MoneyInput
-        label="Amount"
-        value={amount}
-        onChange={setAmount}
-        autoFocus
-        description="Stays in SadaPay"
-      />
+      <MoneyInput label="Amount" value={amount} onChange={setAmount} autoFocus />
       <Button type="submit" variant="primary" size="lg" disabled={!a}>
-        {dir === "in" ? `Set aside ${a ? formatRs(a) : ""}` : `Release ${a ? formatRs(a) : ""}`}
+        {`${dir === "in" ? "Add" : "Take out"} ${a ? formatRs(a) : ""}`.trim()}
       </Button>
     </Form>
   );

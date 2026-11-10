@@ -52,8 +52,8 @@ describe("yearly fixed charges", () => {
         .lines.slice(0, 2)
         .map((l) => [l.label, l.amount]),
     ).toEqual([
-      ["Fixed charges from SadaPay (1)", rs(900)],
-      ["Set aside for yearly charges (1)", rs(1000)],
+      ["iCloud", rs(900)],
+      ["Domain (yearly)", rs(1000)],
     ]);
   });
   it("projection books the full charge in its month", () => {

@@ -113,9 +113,9 @@ describe("allocation", () => {
       source: "suggested",
     });
     expect(a.suggested.lines.map((l) => [l.account_id, l.label, l.amount])).toEqual([
-      ["sadapay", "Fixed charges from SadaPay (1)", rs(5000)],
+      ["sadapay", "Guard", rs(5000)],
       ["sadapay", "Bicycle loan (Mom)", rs(9000)],
-      ["sadapay", "Goal contributions (1)", rs(10000)],
+      ["sadapay", "Bicycle", rs(10000)],
       ["sadapay", "Subscriptions (average)", rs(2000)],
       ["nayapay", "Everyday spending (the rest)", rs(59000)],
     ]);

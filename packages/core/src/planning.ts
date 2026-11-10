@@ -216,22 +216,21 @@ export function suggestedSplit(ds: Dataset, now: string): SplitSuggestion {
   if (sadaMonthly.length)
     lines.push({
       account_id: "sadapay",
-      label: `Fixed charges from SadaPay (${sadaMonthly.length})`,
+      label:
+        sadaMonthly.length === 1 ? (sadaMonthly[0]?.name ?? "") : `Fixed charges (${sadaMonthly.length})`,
       amount: sum(sadaMonthly),
     });
   if (sadaYearly.length)
     lines.push({
       account_id: "sadapay",
-      label: `Set aside for yearly charges (${sadaYearly.length})`,
+      label:
+        sadaYearly.length === 1
+          ? `${sadaYearly[0]?.name ?? ""} (yearly)`
+          : `Yearly charges (${sadaYearly.length})`,
       amount: sum(sadaYearly),
     });
   for (const l of p.installments) lines.push({ account_id: "sadapay", label: l.name, amount: l.amount });
-  if (p.goals.length)
-    lines.push({
-      account_id: "sadapay",
-      label: `Goal contributions (${p.goals.length})`,
-      amount: sum(p.goals),
-    });
+  for (const g of p.goals) lines.push({ account_id: "sadapay", label: g.goal.name, amount: g.amount });
   const hints = new Map(ds.categories.map((c) => [c.id, c.wallet_hint]));
   for (const c of p.categories) {
     if (c.source === "recurring" || c.planned <= 0 || hints.get(c.category_id) !== "sadapay") continue;
