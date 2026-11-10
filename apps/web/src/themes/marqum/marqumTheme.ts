@@ -29,6 +29,9 @@ export const marqumTheme = defineTheme({
     "--color-text-error": ["#c2352b", "#ff9c92"],
     "--color-icon-error": ["#c2352b", "#ff9c92"],
     "--color-error-muted": ["#c2352b14", "#ff8f8424"],
+    // Stone's red/green card fills are dusty (its dark red reads brown); real red and green tints instead.
+    "--color-background-red": ["#fde3e0", "#5a1717"],
+    "--color-background-green": ["#dcf5e3", "#0f4527"],
     "--color-warning": ["#b45309", "#fbbf24"],
     "--color-text-warning": ["#a14a07", "#fcd34d"],
     "--color-icon-warning": ["#b45309", "#fcd34d"],

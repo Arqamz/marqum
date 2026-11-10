@@ -62,7 +62,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
       <div className="min-w-0">{children}</div>
       <nav
         aria-label="Main"
-        className="fixed inset-x-0 bottom-0 z-30 border-border border-t bg-surface pb-safe desk:hidden phoneland:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 border-border border-t bg-surface pb-safe desk:hidden"
       >
         <div className="mx-auto grid h-[var(--tabbar-h)] max-w-[var(--content-max)] grid-cols-4">
           {NAV.map(({ to, label, icon: Icon }) => (
@@ -91,10 +91,7 @@ export function Screen({
   actions,
   children,
   wide,
-  glance,
 }: {
-  /** Home: a sideways phone hides the top bar so the black glance screen fills it */
-  glance?: boolean;
   title?: string;
   back?: boolean;
   actions?: ReactNode;
@@ -106,9 +103,7 @@ export function Screen({
   const allowed = useStore(selfUpdateAllowed);
   return (
     <>
-      <header
-        className={cn("sticky top-0 z-20 bg-bg/95 pt-safe backdrop-blur", glance && "phoneland:hidden")}
-      >
+      <header className="sticky top-0 z-20 bg-bg/95 pt-safe backdrop-blur">
         <div
           className={cn(
             "mx-auto flex h-[var(--topbar-h)] items-center gap-2 px-safe",

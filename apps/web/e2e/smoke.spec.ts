@@ -46,6 +46,15 @@ for (const scheme of ["light", "dark"] as const) {
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.getByRole("button", { name: /Skip/ }).click();
 
+    // Opening Home: a black glance with only the net position and both wallets; a tap glides them into place
+    const glance = page.getByTestId("glance");
+    await expect(glance).toContainText("Net position");
+    await expect(glance).toContainText("SadaPay");
+    await page.waitForTimeout(400); // let the amounts settle
+    await shot("glance");
+    await glance.click();
+    await expect(glance).toHaveCount(0);
+
     // Home: an affordable loan stays calm — a plain loan line, no red, no debt mode
     const hero = page.getByTestId("hero");
     await expect(page.getByTestId("debt-line")).toContainText(
@@ -58,14 +67,6 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(page.getByTestId("sync-state")).toHaveAttribute("data-status", "synced");
     await expect(page.getByTestId("sync-state").getByRole("button")).toHaveCount(0); // nothing shown when healthy
     await shot("home");
-    // Sideways: a black glance screen with the net position and both wallets
-    const portrait = page.viewportSize();
-    await page.setViewportSize({ width: 915, height: 412 });
-    await expect(page.getByTestId("landscape-glance")).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Main" }).first()).toBeHidden();
-    await page.waitForTimeout(600); // let the fade to black finish
-    await shot("home-landscape");
-    if (portrait) await page.setViewportSize(portrait);
 
     // Wallet detail: the month as an account, b/f → in → out → closing
     await page.getByTestId("wallet-nayapay").click();
