@@ -30,6 +30,7 @@ import { WalletLogo } from "../components/brand-logo.tsx";
 import { CategoryTile } from "../components/category-icon.tsx";
 import { CloseBanner } from "../components/close-banner.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
+import { Glance, useGlance } from "../components/glance.tsx";
 import { HeroAmount, TweenMoney } from "../components/money.tsx";
 import { openQuickAdd } from "../components/quick-add.tsx";
 import { Screen } from "../components/shell.tsx";
@@ -44,9 +45,11 @@ import { firstTrackedMonth } from "../lib/tracking.ts";
 export function HomeScreen() {
   const ds = useDataset();
   const now = useNow();
+  const np = useMemo(() => (ds ? netPosition(ds, now) : null), [ds, now]);
+  const debt = useMemo(() => (ds ? debtStatus(ds, now) : null), [ds, now]);
+  const [glance, closeGlance] = useGlance();
   return (
     <Screen
-      glance
       actions={
         <Button size="icon" variant="ghost" label="Add a transaction" onClick={() => openQuickAdd()}>
           <Plus aria-hidden />
@@ -54,6 +57,14 @@ export function HomeScreen() {
       }
     >
       {ds ? <HomeContent ds={ds} now={now} /> : <HomeSkeleton />}
+      {glance ? (
+        <Glance
+          net={np ? np.net : null}
+          wallets={np ? np.wallets : []}
+          alarm={!!debt && debt.in_debt && !debt.affordable}
+          onDone={closeGlance}
+        />
+      ) : null}
     </Screen>
   );
 }
@@ -120,26 +131,20 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
 
   return (
     <VStack gap={6}>
-      <LandscapeGlance np={np} alarm={alarm} />
       <CloseBanner ds={ds} now={now} />
-      <VStack
-        as="section"
-        gap={2}
-        hAlign="center"
-        paddingBlockStart={4}
-        data-testid="hero"
-        className="phoneland:hidden"
-      >
+      <VStack as="section" gap={2} hAlign="center" paddingBlockStart={4} data-testid="hero">
         <Text type="label" color="secondary">
           {alarm ? "Net position · debt you can't cover" : "Net position"}
         </Text>
-        <HeroAmount
-          value={np.net}
-          className={cn(
-            "text-hero font-semibold transition-colors",
-            alarm || np.net < 0 ? "text-neg" : "text-fg",
-          )}
-        />
+        <span data-glance-target="net" className="inline-block">
+          <HeroAmount
+            value={np.net}
+            className={cn(
+              "text-hero font-semibold transition-colors",
+              alarm || np.net < 0 ? "text-neg" : "text-fg",
+            )}
+          />
+        </span>
         <HStack gap={2} hAlign="center" wrap="wrap" vAlign="center">
           <Text type="supporting" hasTabularNumbers>
             {formatRs(pulse.spent)} spent · {formatRs(pulse.per_day)}/day
@@ -159,7 +164,7 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
         ) : null}
       </VStack>
 
-      <Grid columns={2} gap={3} role="group" aria-label="Wallets" className="phoneland:hidden">
+      <Grid columns={2} gap={3} role="group" aria-label="Wallets">
         {np.wallets.map((w) => (
           <WalletCard key={w.account_id} ds={ds} w={w} month={month} now={now} />
         ))}
@@ -212,43 +217,6 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
   );
 }
 
-/**
- * A phone turned sideways: the screen fades to black and shows only the net position and the two wallets, full
- * width and full height. Scrolling down reveals the rest of Home as usual.
- */
-function LandscapeGlance({ np, alarm }: { np: ReturnType<typeof netPosition>; alarm: boolean }) {
-  return (
-    <section
-      aria-label="At a glance"
-      data-testid="landscape-glance"
-      className="animate-fade-in -mt-2 hidden min-h-dvh w-dvw flex-col items-center justify-center gap-6 bg-black text-white [margin-inline:calc(50%-50dvw)] phoneland:flex"
-    >
-      <span className="text-sm tracking-wide text-white/60 uppercase">Net position</span>
-      <HeroAmount
-        value={np.net}
-        className={cn("text-[min(18vh,7rem)] font-semibold", alarm || np.net < 0 ? "text-neg" : "text-white")}
-      />
-      <span className="flex gap-12">
-        {np.wallets.map((w) => (
-          <span key={w.account_id} className="flex items-center gap-3">
-            <span
-              className={cn(
-                "grid size-9 place-items-center rounded-full",
-                w.account_id === "sadapay"
-                  ? "bg-[var(--brand-sadapay)] text-[var(--brand-sadapay-ink)]"
-                  : "bg-[var(--brand-nayapay)] text-[var(--brand-nayapay-ink)]",
-              )}
-            >
-              <WalletLogo id={w.account_id} size={18} />
-            </span>
-            <TweenMoney value={w.balance} className="text-3xl font-semibold text-white" />
-          </span>
-        ))}
-      </span>
-    </section>
-  );
-}
-
 function ImportButton() {
   const navigate = useNavigate();
   return (
@@ -278,7 +246,9 @@ function WalletCard({ ds, w, month, now }: { ds: Dataset; w: WalletPosition; mon
               {w.name}
             </Text>
           </HStack>
-          <TweenMoney value={w.balance} className="text-2xl font-semibold" />
+          <span data-glance-target={id} className="self-start">
+            <TweenMoney value={w.balance} className="text-2xl font-semibold" />
+          </span>
           <StackItem size="fill">
             <HStack gap={3} wrap="wrap" className="text-sm">
               <span className="num inline-flex items-center gap-0.5" title="In this month">

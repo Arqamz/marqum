@@ -241,7 +241,7 @@
     --color-border-gray: light-dark(#d4d3dd, #3a3a42);
     --color-icon-gray: light-dark(#46464e, #e2e2e8);
     --color-text-gray: light-dark(#46464e, #e2e2e8);
-    --color-background-green: light-dark(#d2eccf, #3e5d38);
+    --color-background-green: light-dark(#dcf5e3, #0f4527);
     --color-border-green: light-dark(#bfdfbb, #2f412c);
     --color-icon-green: light-dark(#354f31, #d5e9d2);
     --color-text-green: light-dark(#354f31, #d5e9d2);
@@ -257,7 +257,7 @@
     --color-border-purple: light-dark(#d9cfea, #3f374c);
     --color-icon-purple: light-dark(#4c405b, #e6def3);
     --color-text-purple: light-dark(#4c405b, #e6def3);
-    --color-background-red: light-dark(#fbdad4, #684a45);
+    --color-background-red: light-dark(#fde3e0, #5a1717);
     --color-border-red: light-dark(#f0cac4, #50332e);
     --color-icon-red: light-dark(#603c37, #f7dbd7);
     --color-text-red: light-dark(#603c37, #f7dbd7);
