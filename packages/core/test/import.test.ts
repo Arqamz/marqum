@@ -301,3 +301,44 @@ describe("importStatement: SadaPay re-parse and the statement holder", () => {
     expect(ds.counterparties.find((c) => c.id === card?.counterparty_id)?.name).toBe("Food Panda");
   });
 });
+
+describe("importStatement: counterparty names", () => {
+  const ROW = srow(
+    "naya:9",
+    "2026-11-09T22:04",
+    -39300,
+    "Paid to DWatson Pharmacy And GrocIslamabad PK Visa x0000",
+  );
+  const withCp = (name: string) =>
+    withRows(seeded(), {
+      counterparties: [
+        {
+          id: "cp-dw",
+          name,
+          kind: "merchant",
+          aliases: ["DWATSON PHARMACY AND"],
+          default_category_id: null,
+          default_flow: null,
+          version: 1,
+          deleted: false,
+        },
+      ],
+    });
+  const run = (ds: Dataset) =>
+    apply(ds, execute(ds, importCmd(NOV1_7([{ ...ROW, occurred_at: "2026-11-05T22:04" }])), ctx()).mutations);
+
+  it("an auto-named counterparty read with fewer words gets the fuller name and the row links to it", () => {
+    const ds = run(withCp("Dwatson Pharmacy And"));
+    expect(ds.counterparties.filter((c) => /dwatson/i.test(c.name))).toHaveLength(1);
+    expect(ds.counterparties.find((c) => c.id === "cp-dw")).toMatchObject({
+      name: "DWatson Pharmacy And Groc Islamabad",
+      aliases: ["DWATSON PHARMACY AND", "DWATSON PHARMACY AND GROC"],
+    });
+    expect(ds.transactions.find((t) => t.external_id === "naya:9")?.counterparty_id).toBe("cp-dw");
+  });
+  it("a name you typed is never changed", () => {
+    const ds = run(withCp("D. Watson (G-13)"));
+    expect(ds.counterparties.find((c) => c.id === "cp-dw")?.name).toBe("D. Watson (G-13)");
+    expect(ds.transactions.find((t) => t.external_id === "naya:9")?.counterparty_id).toBe("cp-dw");
+  });
+});

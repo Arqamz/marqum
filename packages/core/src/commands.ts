@@ -148,6 +148,22 @@ function guardClosed(ds: Dataset, cmd: Command, ctx: ExecContext, out: Outcome):
 
 // ───────────────────────── helpers ─────────────────────────
 
+/**
+ * A counterparty Marqūm named itself (its name is just an alias, title-cased, or a shorter start of the new
+ * name) gets the fuller name read from a better description, and the new key as an alias. A name you typed is
+ * never changed.
+ */
+function upgradeAutoName(cp: Counterparty, name: string, key: string): Counterparty | null {
+  const auto = cp.aliases.some((a) => titleCaseWords(a) === titleCaseWords(cp.name));
+  const longer =
+    name.length > cp.name.length && name.toLowerCase().startsWith(cp.name.toLowerCase().replace(/\s+$/, ""));
+  const aliases = cp.aliases.includes(key) ? cp.aliases : [...cp.aliases, key];
+  if (auto && longer) return { ...cp, name, aliases };
+  return aliases !== cp.aliases ? { ...cp, aliases } : null;
+}
+
+const titleCaseWords = (s: string) => normalizeKey(s);
+
 function newCounterparty(
   ctx: ExecContext,
   name: string,
@@ -229,11 +245,21 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
   let working = ds;
   // A counterparty first seen on an internal/funding transfer is you (your own name on the other wallet or bank).
   const resolveCounterparty = (description: string, classified: string | null, flow: Flow): string | null => {
-    if (classified) return classified;
     const ex = extractCounterparty(description);
+    if (classified && !ex) return classified;
     if (!ex) return null;
-    const known = createdCp.get(ex.key) ?? findCounterpartyByKey(working, ex.key);
-    if (known) return known.id;
+    const known = classified
+      ? (working.counterparties.find((c) => c.id === classified) ?? null)
+      : (createdCp.get(ex.key) ?? findCounterpartyByKey(working, ex.key));
+    if (classified && !known) return classified;
+    if (known) {
+      const upgraded = upgradeAutoName(known, ex.name, ex.key);
+      if (upgraded) {
+        mutations.push(mut("counterparties", upgraded));
+        working = applyMutations(working, [mut("counterparties", upgraded)]);
+      }
+      return known.id;
+    }
     const kind = flow === "internal" || flow === "funding" ? "self" : ex.person ? "person" : "merchant";
     const cp = newCounterparty(ctx, ex.name, ex.key, kind);
     createdCp.set(ex.key, cp);

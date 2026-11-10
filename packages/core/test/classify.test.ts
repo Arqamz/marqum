@@ -219,9 +219,20 @@ describe("merchant names", () => {
     ["Spotify*p48f8f2310 Regeringsgatan", "Spotify"],
     ["19 Spotify.com 111 53 Ab Swe", "Spotify"],
     ["F-11 (CRUMBLE - ISD-RWP) KARACHI PK Visa x0000", "CRUMBLE"],
-    ["Dwatson Pharmacy And GrocIslamabad PK Visa x0000", "Dwatson Pharmacy And Groc"],
+    ["DWatson Pharmacy And GrocIslamabad PK Visa x0000", "DWatson Pharmacy And Groc Islamabad"],
+    ["Imtiaz Super Market Stockholm SWE", "Imtiaz Super Market Stockholm"],
   ])("%s → %s", (raw, name) => {
     expect(merchantName(raw)).toBe(name);
+  });
+});
+
+describe("counterparty names", () => {
+  it("keeps the whole merchant name (city split from a glued word) while the key stays short", () => {
+    expect(extractCounterparty("Paid to DWatson Pharmacy And GrocIslamabad PK Visa x0000")).toEqual({
+      key: "DWATSON PHARMACY AND GROC",
+      name: "DWatson Pharmacy And Groc Islamabad",
+      person: false,
+    });
   });
 });
 

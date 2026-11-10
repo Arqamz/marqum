@@ -67,13 +67,37 @@ export function normalizeKey(raw: string): string {
 
 /** Card networks and words after which a merchant line carries no more name. */
 const MERCHANT_STOP = new Set(["VISA", "MASTERCARD", "UNIONPAY", "PAYPAK", "CARD", "POS"]);
-/** Cities banks glue onto the end of a merchant ("GrocIslamabad"). */
-const GLUED_CITY = /(karachi|lahore|islamabad|rawalpindi|peshawar|quetta|multan|faisalabad)$/i;
+/** Country codes banks append to a merchant line ("… Islamabad PK", "… Stockholm SWE"). */
+const COUNTRY = new Set([
+  "PK",
+  "PAK",
+  "PAKISTAN",
+  "US",
+  "USA",
+  "GB",
+  "GBR",
+  "UK",
+  "SE",
+  "SWE",
+  "AE",
+  "ARE",
+  "IE",
+  "IRL",
+  "NL",
+  "NLD",
+  "SG",
+  "SGP",
+]);
+
+/** "GrocIslamabad" → "Groc Islamabad"; "DWatson" stays (a capital run is part of the name). */
+const splitGlued = (w: string): string => w.replace(/([a-z])([A-Z][a-z])/g, "$1 $2");
 
 /**
- * Merchant name from a card/purchase line: the words before the address, terminal id or card details start.
+ * Merchant name from a card/purchase line: every word up to where the address, terminal id, card details or
+ * country code start. Glued words are split and the city is kept, because it often tells branches apart.
  * "Food Panda 18th Floor, Office # 1-4, Karachi Si Pak" → "Food Panda"; "Spotify*p48f8f2310 …" → "Spotify";
- * "F-11 (CRUMBLE - ISD-RWP) KARACHI PK" → "CRUMBLE" (a code outside, the name inside the brackets).
+ * "F-11 (CRUMBLE - ISD-RWP) KARACHI PK" → "CRUMBLE"; "DWatson Pharmacy And GrocIslamabad PK Visa x0000"
+ * → "DWatson Pharmacy And Groc Islamabad".
  */
 export function merchantName(raw: string): string {
   const line = raw.split(/[|\n\r]/)[0] ?? "";
@@ -81,19 +105,16 @@ export function merchantName(raw: string): string {
   let head = line.split("(")[0] ?? "";
   if (head.includes("*")) head = head.split("*")[0] ?? "";
   const out: string[] = [];
-  for (const tok of head.split(/\s+/)) {
+  for (const tok of splitGlued(head).split(/\s+/)) {
     if (!tok) continue;
     if (/\d/.test(tok)) {
       if (out.length) break; // an address ("18th Floor") or reference starts here
       continue; // a leading code ("F-11", "19")
     }
     let w = tok.replace(/\.(com|pk|net|org|io)$/i, "");
-    if (MERCHANT_STOP.has(w.toUpperCase().replace(/[^A-Z]/g, ""))) break;
-    const city = GLUED_CITY.exec(w);
-    if (city && city.index > 2) {
-      out.push(w.slice(0, city.index));
-      break;
-    }
+    const bare = w.toUpperCase().replace(/[^A-Z]/g, "");
+    if (MERCHANT_STOP.has(bare)) break;
+    if (COUNTRY.has(bare) && out.length) break;
     const comma = w.endsWith(",");
     w = w.replace(/[,;:]+$/, "");
     if (w) out.push(w);
@@ -102,6 +123,20 @@ export function merchantName(raw: string): string {
   const name = out.join(" ");
   if (normalizeKey(name)) return name;
   return (bracket.split(/\s+-\s+/)[0] ?? "").trim();
+}
+
+/** Title-case words that are all caps or all lower; keep deliberate mixed case ("DWatson", "iCloud"). */
+export function displayName(s: string): string {
+  return s
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .map((w) =>
+      w === w.toUpperCase() || w === w.toLowerCase()
+        ? (w[0]?.toUpperCase() ?? "") + w.slice(1).toLowerCase()
+        : w,
+    )
+    .join(" ");
 }
 
 function clean(raw: string, merchant: boolean): string {
@@ -147,9 +182,12 @@ export function extractCounterparty(description: string): ExtractedCounterparty 
   }
   if (raw === null && !FEE_TEXT.test(d)) raw = firstLine;
   if (!raw) return null;
-  const key = normalizeKey(clean(raw, !person));
+  const cleaned = clean(raw, !person);
+  const key = normalizeKey(cleaned);
   if (!key) return null;
-  return { key, name: titleCase(key), person };
+  // the name keeps every word of the cleaned text (cities too); the key is the short form used for matching
+  const name = person ? titleCase(key) : displayName(cleaned.replace(/[^A-Za-z0-9&'.\s-]/g, " "));
+  return { key, name: name || titleCase(key), person };
 }
 
 /** Normalised counterparty key from a bank description, or null when none can be extracted. */
@@ -159,10 +197,23 @@ export function counterpartyKey(description: string): string | null {
 
 /** Find the counterparty whose aliases (or normalised name) contain `key`. */
 export function findCounterpartyByKey(ds: Dataset, key: string): Counterparty | null {
+  const live = ds.counterparties.filter((c) => !c.deleted);
+  const exact =
+    live.find((c) => c.aliases.some((a) => normalizeKey(a) === key)) ??
+    live.find((c) => normalizeKey(c.name) === key);
+  if (exact) return exact;
+  // The same merchant read with more or fewer words ("DWATSON PHARMACY AND" vs "DWATSON PHARMACY AND GROC"):
+  // one key starts with the other, word by word, sharing at least two words.
+  const words = key.split(" ");
+  const prefixOf = (a: string[], b: string[]) =>
+    a.length >= 2 && a.length <= b.length && a.every((w, i) => b[i] === w);
   return (
-    ds.counterparties.find((c) => c.aliases.some((a) => normalizeKey(a) === key)) ??
-    ds.counterparties.find((c) => normalizeKey(c.name) === key) ??
-    null
+    live.find((c) =>
+      c.aliases.some((a) => {
+        const aw = normalizeKey(a).split(" ");
+        return prefixOf(aw, words) || prefixOf(words, aw);
+      }),
+    ) ?? null
   );
 }
 
