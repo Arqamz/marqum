@@ -65,10 +65,49 @@ export function normalizeKey(raw: string): string {
   return words.slice(0, 4).join(" ");
 }
 
+/** Card networks and words after which a merchant line carries no more name. */
+const MERCHANT_STOP = new Set(["VISA", "MASTERCARD", "UNIONPAY", "PAYPAK", "CARD", "POS"]);
+/** Cities banks glue onto the end of a merchant ("GrocIslamabad"). */
+const GLUED_CITY = /(karachi|lahore|islamabad|rawalpindi|peshawar|quetta|multan|faisalabad)$/i;
+
+/**
+ * Merchant name from a card/purchase line: the words before the address, terminal id or card details start.
+ * "Food Panda 18th Floor, Office # 1-4, Karachi Si Pak" → "Food Panda"; "Spotify*p48f8f2310 …" → "Spotify";
+ * "F-11 (CRUMBLE - ISD-RWP) KARACHI PK" → "CRUMBLE" (a code outside, the name inside the brackets).
+ */
+export function merchantName(raw: string): string {
+  const line = raw.split(/[|\n\r]/)[0] ?? "";
+  const bracket = /\(([^)]*[A-Za-z]{3,}[^)]*)\)/.exec(line)?.[1] ?? "";
+  let head = line.split("(")[0] ?? "";
+  if (head.includes("*")) head = head.split("*")[0] ?? "";
+  const out: string[] = [];
+  for (const tok of head.split(/\s+/)) {
+    if (!tok) continue;
+    if (/\d/.test(tok)) {
+      if (out.length) break; // an address ("18th Floor") or reference starts here
+      continue; // a leading code ("F-11", "19")
+    }
+    let w = tok.replace(/\.(com|pk|net|org|io)$/i, "");
+    if (MERCHANT_STOP.has(w.toUpperCase().replace(/[^A-Z]/g, ""))) break;
+    const city = GLUED_CITY.exec(w);
+    if (city && city.index > 2) {
+      out.push(w.slice(0, city.index));
+      break;
+    }
+    const comma = w.endsWith(",");
+    w = w.replace(/[,;:]+$/, "");
+    if (w) out.push(w);
+    if (comma) break; // "Name, address…"
+  }
+  const name = out.join(" ");
+  if (normalizeKey(name)) return name;
+  return (bracket.split(/\s+-\s+/)[0] ?? "").trim();
+}
+
 function clean(raw: string, merchant: boolean): string {
+  if (merchant) return merchantName(raw);
   let s = raw.split(/[|\n\r]/)[0] ?? "";
   s = s.split("(")[0] ?? "";
-  if (merchant && s.includes("*")) s = s.split("*")[0] ?? "";
   // drop any token containing a digit (account numbers, refs, terminal ids)
   return s
     .split(/\s+/)
@@ -87,6 +126,8 @@ const PATTERNS: { re: RegExp; person: boolean }[] = [
     person: false,
   },
   { re: /\bbill payment\s*(?:to|for|of|-)?\s*(.+)/i, person: false },
+  // NayaPay card spends: "Paid to F-11 (CRUMBLE - ISD-RWP) KARACHI PK Visa x1234"
+  { re: /^paid\s+(?:to|at)\s+(.+)$/i, person: false },
 ];
 
 /** Extract the person/merchant from a bank description. */
@@ -153,20 +194,37 @@ export interface ClassifyResult {
   counterparty_name: string | null;
 }
 
-/** Flow from the text alone (step 3 of classify). */
-export function inferFlow(t: ClassifyInput, cp: Counterparty | null): Flow {
+/**
+ * Flow from the text alone (step 3 of classify).
+ * - A transfer naming the other wallet is internal unless it involves a known non-self counterparty.
+ * - Bank text (Meezan…) is funding only when the money comes from *you*: your self counterparty, or no named
+ *   sender at all. A named person who isn't you (someone who also banks with Meezan) is income.
+ */
+export function inferFlow(
+  t: ClassifyInput,
+  cp: Counterparty | null,
+  extracted?: ExtractedCounterparty | null,
+): Flow {
   const text = `${t.description} ${t.bank_type ?? ""} ${t.reason ?? ""}`;
   const mentionsOtherWallet = OTHER_WALLET[t.account_id].test(text);
-  // A transfer naming the other wallet is internal unless it goes to a known non-self counterparty.
   const internal = mentionsOtherWallet && (cp === null || cp.kind === "self");
+  const fromYou = cp ? cp.kind === "self" : !extracted?.person;
   if (t.amount > 0) {
     if (internal) return "internal";
-    if (FUNDING_TEXT.test(text)) return "funding";
+    if (FUNDING_TEXT.test(text) && fromYou) return "funding";
     return "income";
   }
   if (internal) return "internal";
   if (FEE_TEXT.test(text)) return "fee";
   return "spend";
+}
+
+/** True when a counterparty key is (part of) the statement holder's name: "ARQAM" ⊂ "Arqam Zia". */
+export function isHolder(key: string, holder: string | null | undefined): boolean {
+  if (!holder) return false;
+  const mine = new Set(normalizeKey(holder).split(" ").filter(Boolean));
+  const words = key.split(" ").filter(Boolean);
+  return words.length > 0 && words.every((w) => mine.has(w));
 }
 
 const INFLOW_ONLY: ReadonlySet<Flow> = new Set<Flow>(["income", "reimbursement", "loan_in", "funding"]);
@@ -208,7 +266,7 @@ export function classify(ds: Dataset, t: ClassifyInput, cpOverride?: Counterpart
     if (flow === null && cp.default_flow && flowFitsDirection(cp.default_flow, t.amount))
       flow = cp.default_flow;
   }
-  if (flow === null) flow = inferFlow(t, cp);
+  if (flow === null) flow = inferFlow(t, cp, extracted);
   if (flow === "funding" || flow === "internal") category_id = null;
   if (flow === "fee" && category_id === null && ds.categories.some((c) => c.id === "fees" && !c.deleted))
     category_id = "fees";
@@ -219,4 +277,77 @@ export function classify(ds: Dataset, t: ClassifyInput, cpOverride?: Counterpart
     counterparty_key: extracted?.key ?? null,
     counterparty_name: cp?.name ?? extracted?.name ?? null,
   };
+}
+
+/** Banks and wallets a transfer can come from or go to: [label, regex source]. */
+const INSTITUTIONS: [string, string][] = [
+  ["Meezan", "meezan|mbl"],
+  ["NayaPay", "naya ?pay"],
+  ["SadaPay", "sada ?pay"],
+  ["Easypaisa", "easy ?paisa"],
+  ["JazzCash", "jazz ?cash"],
+  ["HBL", "hbl|habib bank"],
+  ["UBL", "ubl|united bank"],
+  ["MCB", "mcb"],
+  ["Alfalah", "alfalah|bafl"],
+  ["Allied", "allied|abl"],
+  ["Askari", "askari"],
+  ["Faysal", "faysal"],
+  ["Bank Islami", "bank ?islami"],
+];
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The rule "Always tag … like this" creates for a transaction. Names alone are ambiguous ("ARQAM" is both your
+ * Meezan account and your NayaPay wallet), so a transfer's rule also requires the same bank/wallet and the same
+ * direction: "From Arqam · Meezan" won't match "From Arqam · NayaPay". A merchant's rule is its name.
+ * The pattern is matched (case-insensitively) against `${description} ${reason}`.
+ */
+export function rememberRule(description: string): { pattern: string; label: string } | null {
+  const ex = extractCounterparty(description);
+  if (!ex) return null;
+  const words = ex.key.toLowerCase().split(" ").filter(Boolean);
+  const name = `\\b${words.map(escapeRe).join("\\W*")}\\b`;
+  if (!ex.person) return { pattern: name, label: ex.name };
+  const text = description.replace(/\s+/g, " ");
+  const incoming = /\b(from|incoming|received)\b/i.test(text);
+  const outgoing = !incoming && /\b(to|outgoing|sent|paid)\b/i.test(text);
+  const dir = incoming ? "(?:from|incoming|received)" : outgoing ? "(?:to|outgoing|sent|paid)" : null;
+  // the institution named after the counterparty (the sender's/receiver's bank), else anywhere
+  const after = text.slice(Math.max(0, text.toUpperCase().indexOf(words[0]?.toUpperCase() ?? "")));
+  const inst =
+    INSTITUTIONS.find(([, re]) => new RegExp(`\\b(?:${re})\\b`, "i").test(after)) ??
+    INSTITUTIONS.find(([, re]) => new RegExp(`\\b(?:${re})\\b`, "i").test(text));
+  const parts = [dir ? `\\b${dir}\\b` : null, name, inst ? `\\b(?:${inst[1]})\\b` : null].filter(
+    (p): p is string => p !== null,
+  );
+  const pattern = parts.map((p) => `(?=[\\s\\S]*${p})`).join("");
+  const label = [incoming ? `From ${ex.name}` : outgoing ? `To ${ex.name}` : ex.name, inst?.[0]]
+    .filter(Boolean)
+    .join(" · ");
+  return { pattern, label };
+}
+
+/** Human-readable form of a rule pattern made by rememberRule ("From Arqam · Meezan"); other patterns as is. */
+export function describeRule(pattern: string): string {
+  const parts = [...pattern.matchAll(/\(\?=\[\\s\\S\]\*(.+?)\)(?=\(\?=|$)/g)].map((m) => m[1] ?? "");
+  if (parts.length === 0) {
+    const plain = /^\\b(.+)\\b$/.exec(pattern)?.[1];
+    return plain && !/[()|?*+[\]]/.test(plain.replace(/\\W\*/g, " "))
+      ? titleCase(plain.replace(/\\W\*/g, " "))
+      : pattern;
+  }
+  let dir = "";
+  let inst = "";
+  let name = "";
+  for (const p of parts) {
+    const inner = p.replace(/^\\b/, "").replace(/\\b$/, "");
+    if (inner.startsWith("(?:from")) dir = "From";
+    else if (inner.startsWith("(?:to")) dir = "To";
+    else if (inner.startsWith("(?:"))
+      inst = INSTITUTIONS.find(([, re]) => inner === `(?:${re})`)?.[0] ?? inner;
+    else name = titleCase(inner.replace(/\\W\*/g, " "));
+  }
+  return [dir ? `${dir} ${name}` : name, inst].filter(Boolean).join(" · ");
 }

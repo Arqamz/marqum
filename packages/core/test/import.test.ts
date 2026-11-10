@@ -219,3 +219,85 @@ describe("importStatement: closed months", () => {
     expect(execute(base(), importCmd(wrong), ctx()).error).toBe("closed_month");
   });
 });
+
+describe("importStatement: SadaPay re-parse and the statement holder", () => {
+  const SADA = (rows: ReturnType<typeof srow>[], holder: string | null = "Test User Zia") => ({
+    ...parsed("sadapay", "2026-11-01", "2026-11-10", rows),
+    holder,
+  });
+  const FUND = srow("sada:hA", "2026-11-03T16:49", 163500, "From TEST USER (Meezan Bank (MBL))");
+  const OTHER = srow("sada:hB", "2026-11-09T17:36", 300000, "From OTHER PERSON (Meezan Bank (MBL))");
+  const WALLET = srow("sada:hC", "2026-11-05T10:00", 500000, "From TEST USER (NayaPay)");
+
+  it("a transfer naming the holder is you: Meezan → funding, NayaPay → internal; others at Meezan are income", () => {
+    const out = execute(seeded(), importCmd(SADA([FUND, OTHER, WALLET])), ctx());
+    expect(out.ok).toBe(true);
+    const ds = apply(seeded(), out.mutations);
+    const by = new Map(ds.transactions.map((t) => [t.external_id, t]));
+    expect(by.get("sada:hA")?.flow).toBe("funding");
+    expect(by.get("sada:hB")?.flow).toBe("income");
+    expect(by.get("sada:hC")?.flow).toBe("internal");
+    expect(ds.counterparties.find((c) => c.aliases.includes("TEST USER"))?.kind).toBe("self");
+    expect(ds.counterparties.find((c) => c.aliases.includes("OTHER PERSON"))?.kind).toBe("person");
+  });
+
+  it("upgrades an existing 'person' counterparty that is really the holder to self", () => {
+    const base = withRows(seeded(), {
+      counterparties: [
+        {
+          id: "cp-me",
+          name: "Test User",
+          kind: "person",
+          aliases: ["TEST USER"],
+          default_category_id: null,
+          default_flow: null,
+          version: 1,
+          deleted: false,
+        },
+      ],
+    });
+    const out = execute(base, importCmd(SADA([FUND])), ctx());
+    const ds = apply(base, out.mutations);
+    expect(ds.counterparties.find((c) => c.id === "cp-me")?.kind).toBe("self");
+    expect(ds.transactions.find((t) => t.external_id === "sada:hA")?.flow).toBe("funding");
+  });
+
+  it("re-keys rows whose text now parses differently, keeping your tags", () => {
+    // first import: the old parser glued the next merchant onto this row and lost the sender's name
+    const oldOther = srow("sada:hOLD", OTHER.occurred_at, OTHER.amount, "(MBL))");
+    const oldCard = srow("sada:hOLDCARD", "2026-11-06T20:48", -278799, "Karachi Si Pak");
+    let ds = apply(seeded(), execute(seeded(), importCmd(SADA([oldOther, oldCard])), ctx()).mutations);
+    const tagged = ds.transactions.find((t) => t.external_id === "sada:hOLD");
+    if (!tagged) throw new Error("missing");
+    ds = apply(
+      ds,
+      execute(
+        ds,
+        cmd("tagTransaction", { txn_id: tagged.id, flow: "reimbursement", category_id: "food" }),
+        ctx(),
+      ).mutations,
+    );
+    // corrected statement: new ids and descriptions for the same two transactions
+    const newCard = srow(
+      "sada:hNEWCARD",
+      oldCard.occurred_at,
+      oldCard.amount,
+      "Food Panda 18th Floor, Office # 1-4, Karachi Si Pak",
+    );
+    const out = execute(ds, importCmd(SADA([OTHER, newCard]), "b".repeat(64)), ctx());
+    expect(out.result).toMatchObject({ added: 0, updated: 2, removed: 0 });
+    ds = apply(ds, out.mutations);
+    const live = ds.transactions.filter((t) => !t.deleted && t.source === "statement");
+    expect(live).toHaveLength(2);
+    const reimb = live.find((t) => t.id === tagged.id);
+    expect(reimb).toMatchObject({
+      external_id: "sada:hB",
+      description: "From OTHER PERSON (Meezan Bank (MBL))",
+      flow: "reimbursement",
+      category_id: "food",
+    });
+    const card = live.find((t) => t.external_id === "sada:hNEWCARD");
+    expect(card?.category_id).toBe("food");
+    expect(ds.counterparties.find((c) => c.id === card?.counterparty_id)?.name).toBe("Food Panda");
+  });
+});

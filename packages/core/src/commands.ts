@@ -20,6 +20,7 @@ import {
   compileRule,
   extractCounterparty,
   findCounterpartyByKey,
+  isHolder,
   normalizeKey,
 } from "./classify.ts";
 import { closeChecklist } from "./close.ts";
@@ -241,6 +242,25 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
     return cp.id;
   };
 
+  // Transfers naming the statement's holder are you: make sure that counterparty is "self" before classifying,
+  // so "From ARQAM (Meezan Bank)" is funding and "From ARQAM (NayaPay)" is internal — never someone's income.
+  if (st.holder) {
+    const done = new Set<string>();
+    for (const r of tracked) {
+      const ex = extractCounterparty(r.description);
+      if (!ex?.person || done.has(ex.key) || !isHolder(ex.key, st.holder)) continue;
+      done.add(ex.key);
+      const known = createdCp.get(ex.key) ?? findCounterpartyByKey(working, ex.key);
+      if (known?.kind === "self") continue;
+      const cp: Counterparty = known
+        ? { ...known, kind: "self" }
+        : newCounterparty(ctx, ex.name, ex.key, "self");
+      if (!known) createdCp.set(ex.key, cp);
+      mutations.push(mut("counterparties", cp));
+      working = applyMutations(working, [mut("counterparties", cp)]);
+    }
+  }
+
   let added = 0;
   let updated = 0;
   let unchanged = 0;
@@ -276,6 +296,55 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
     if (changedFields(ex, next).length || ex.statement_id !== statementId)
       mutations.push(mut("transactions", { ...next, updated_at: now }));
   }
+
+  // Re-key: a verified row this statement no longer names (its id changed because the bank text now parses
+  // differently) but with the same time and amount is the same transaction. Update it in place so your tags,
+  // reason and links survive; refresh the counterparty from the new text and fill the category if unset.
+  const statementIds = new Set(tracked.map((r) => r.external_id));
+  const orphans = accTxns.filter(
+    (t) =>
+      t.status === "verified" &&
+      t.occurred_at >= rangeFrom &&
+      t.occurred_at <= toDT &&
+      !(t.external_id && statementIds.has(t.external_id)),
+  );
+  const rekeyed = new Set<string>();
+  const stillFresh: typeof fresh = [];
+  for (const r of fresh) {
+    const old = orphans.find(
+      (t) => !rekeyed.has(t.id) && t.occurred_at === r.occurred_at && t.amount === r.amount,
+    );
+    if (!old) {
+      stillFresh.push(r);
+      continue;
+    }
+    rekeyed.add(old.id);
+    updated++;
+    const c = classify(working, {
+      account_id: acc,
+      amount: r.amount,
+      description: r.description,
+      reason: r.reason,
+      bank_type: r.type,
+    });
+    mutations.push(
+      mut("transactions", {
+        ...old,
+        description: r.description,
+        bank_type: r.type,
+        fee: r.fee,
+        balance_after: r.balance_after,
+        external_id: r.external_id,
+        statement_id: statementId,
+        reason: old.reason ?? r.reason,
+        category_id: old.category_id ?? c.category_id,
+        counterparty_id: resolveCounterparty(r.description, c.counterparty_id, old.flow),
+        updated_at: now,
+      }),
+    );
+  }
+  fresh.length = 0;
+  fresh.push(...stillFresh);
 
   const provisional = accTxns.filter((t) => t.status !== "verified");
   const names: Record<string, string> = {};
@@ -363,6 +432,7 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
   for (const t of accTxns) {
     if (t.status !== "verified" || t.occurred_at < rangeFrom || t.occurred_at > toDT) continue;
     if (t.external_id && keep.has(t.external_id)) continue;
+    if (rekeyed.has(t.id)) continue;
     removed++;
     mutations.push(tombstone("transactions", t, { updated_at: now }));
   }

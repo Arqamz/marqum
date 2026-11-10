@@ -195,7 +195,44 @@ const SADAPAY_LINES = [
   L(2, 356, [60, "07:12 PM"], [210, "(Card payment)"]),
 ];
 
+/** SadaPay centres each row vertically: a 2-line merchant sits *above* the date line (synthetic data). */
+const SADAPAY_CENTRED = [
+  L(1, 720, [20, "Account Statement"]),
+  L(1, 702, [20, "Name: Test User"]),
+  L(1, 596, [40, "Total debit"], [170, "Total credit"]),
+  L(1, 573, [40, "2787.99"], [170, "3720.00"]),
+  L(1, 506, [20, "Account transactions from 1 November 2026 - 10 November 2026"]),
+  L(1, 464, [81, "Date"], [210, "Description"], [500, "Debit/Credit"]),
+  L(1, 368, [46, "4 Nov, 2026"], [210, "From TEST USER (Meezan Bank (MBL))"]),
+  L(1, 362, [506, "+ 720.00"]),
+  L(1, 356, [60, "01:05 PM"], [210, "(Incoming transfer)"]),
+  L(1, 316, [210, "Food Panda 18th Floor, Office # 1-4,"]),
+  L(1, 308, [46, "6 Nov, 2026"]),
+  L(1, 304, [210, "Karachi Si Pak"]),
+  L(1, 301, [499, "- 2,787.99"]),
+  L(1, 296, [58, "08:48 PM"]),
+  L(1, 291, [210, "(Card)"]),
+  L(1, 34, [20, "Note: This is a system generated statement and does not require a signature."]),
+  L(2, 661, [81, "Date"], [210, "Description"], [500, "Debit/Credit"]),
+  L(2, 623, [210, "From OTHER PERSON (Meezan Bank"]),
+  L(2, 615, [46, "9 Nov, 2026"]),
+  L(2, 611, [210, "(MBL))"]),
+  L(2, 608, [493, "+ 3,000.00"]),
+  L(2, 603, [58, "05:36 PM"]),
+  L(2, 598, [210, "(Incoming transfer)"]),
+];
+
 describe("SadaPay PDF", () => {
+  it("keeps a merchant line that sits above its date with its own row, and reads the holder", async () => {
+    const st = await readPdfStatement(SADAPAY_CENTRED);
+    expect(st.holder).toBe("Test User");
+    expect(st.rows.map((r) => [r.amount, r.type, r.description])).toEqual([
+      [72000, "Incoming transfer", "From TEST USER (Meezan Bank (MBL))"],
+      [-278799, "Card", "Food Panda 18th Floor, Office # 1-4, Karachi Si Pak"],
+      [300000, "Incoming transfer", "From OTHER PERSON (Meezan Bank (MBL))"],
+    ]);
+    expect(st.checks.every((c) => c.ok)).toBe(true);
+  });
   it("reads multi-page tables, debits and totals", async () => {
     const st = await readPdfStatement(SADAPAY_LINES);
     expect(st.bank).toBe("sadapay");

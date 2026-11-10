@@ -1,6 +1,5 @@
 import {
   classify,
-  counterpartyKey,
   type Dataset,
   dayLabel,
   formatRs,
@@ -8,6 +7,7 @@ import {
   monthLabel,
   monthOf,
   parseRs,
+  rememberRule,
 } from "@marqum/core";
 import type { Flow, Transaction } from "@marqum/schema";
 import { Lock } from "lucide-react";
@@ -75,8 +75,14 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
     if (!picked && suggestion.category_id) setCategory(suggestion.category_id);
   }, [picked, suggestion.category_id]);
 
-  const pattern =
-    counterpartyKey(txn.description) ?? (reason.trim() ? escapeRegex(reason.trim().toLowerCase()) : null);
+  // A transfer's rule includes the bank/wallet and direction, so "From Arqam · Meezan" (income) and
+  // "From Arqam · NayaPay" (between wallets) never share a rule.
+  const rule =
+    rememberRule(txn.description) ??
+    (reason.trim()
+      ? { pattern: escapeRegex(reason.trim().toLowerCase()), label: `“${reason.trim()}”` }
+      : null);
+  const pattern = rule?.pattern ?? null;
   const flows = txn.amount < 0 ? OUT_FLOWS : IN_FLOWS;
   const loans = ds.loans.filter((l) => l.closed_on === null || l.id === loanId);
   const candidates = useMemo(
@@ -268,7 +274,7 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
       {!closed && pattern ? (
         <div className="flex items-center justify-between gap-4">
           <label htmlFor="remember-rule" className="min-w-0 text-sm">
-            Always tag <span className="font-mono">{pattern}</span> like this
+            Always tag <span className="font-medium">{rule?.label}</span> like this
           </label>
           <Switch
             id="remember-rule"

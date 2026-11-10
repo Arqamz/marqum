@@ -119,9 +119,13 @@ export const SEED_RULES: { pattern: string; category_id: string | null; flow: st
     category_id: "subscriptions.domain",
     flow: null,
   },
-  { pattern: "\\b(pandapro|panda pro|foodpanda pro)\\b", category_id: "subscriptions.foodpanda", flow: null },
   {
-    pattern: "\\b(foodpanda|cheetay|kfc|mcdonald|burger|pizza|cafe|restaurant|dhaba)\\b",
+    pattern: "\\b(pandapro|panda ?pro|food ?panda pro)\\b",
+    category_id: "subscriptions.foodpanda",
+    flow: null,
+  },
+  {
+    pattern: "\\b(food ?panda|cheetay|kfc|mcdonald|burger|pizza|cafe|restaurant|dhaba|crumbl?e)\\b",
     category_id: "food",
     flow: null,
   },
@@ -134,5 +138,7 @@ export const SEED_RULES: { pattern: string; category_id: string | null; flow: st
   },
   { pattern: "\\b(pharmacy|dvago|medical store|clinic|hospital)\\b", category_id: "health", flow: null },
   { pattern: "\\b(service charges?|fee|tax deducted|withholding)\\b", category_id: "fees", flow: "fee" },
-  { pattern: "\\bmeezan\\b", category_id: null, flow: "funding" },
+  // Meezan alone isn't funding (anyone can bank there): funding = a transfer from *you* (see classify.inferFlow)
+  { pattern: "\\bown[- ]account transfer\\b", category_id: null, flow: "funding" },
+  { pattern: "\\b(spotify|netflix|youtube premium)\\b", category_id: "subscriptions", flow: null },
 ];

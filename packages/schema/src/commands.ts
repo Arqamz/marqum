@@ -33,6 +33,8 @@ export const ParsedStatement = z.object({
   totalOut: Paisa,
   rows: z.array(ParsedStatementRow),
   checks: z.array(StatementCheck),
+  /** account holder's name as printed on the statement ("Arqam Zia") — identifies transfers from yourself */
+  holder: z.string().nullable().optional(),
 });
 export type ParsedStatement = z.infer<typeof ParsedStatement>;
 

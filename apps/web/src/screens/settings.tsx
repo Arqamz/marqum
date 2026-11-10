@@ -2,6 +2,7 @@ import {
   addMonths,
   type Dataset,
   dayLabel,
+  describeRule,
   formatRs,
   karachiNow,
   monthLabel,
@@ -542,7 +543,9 @@ function RulesSheet({
               .map((r) => (
                 <li key={r.id} className="flex items-center gap-3 py-2">
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-mono text-sm">{r.pattern}</span>
+                    <span className="block truncate text-sm" title={r.pattern}>
+                      {describeRule(r.pattern)}
+                    </span>
                     <span className="text-sm text-fg-muted">
                       {r.category_id ? (l.category.get(r.category_id)?.name ?? r.category_id) : r.flow}
                     </span>

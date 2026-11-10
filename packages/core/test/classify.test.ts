@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { classify, counterpartyKey, extractCounterparty } from "../src/classify.ts";
+import {
+  classify,
+  counterpartyKey,
+  describeRule,
+  extractCounterparty,
+  isHolder,
+  merchantName,
+  rememberRule,
+} from "../src/classify.ts";
 import { matchProvisional } from "../src/reconcile.ts";
 import { cp, prov, seeded, withRows } from "./builders.ts";
 
@@ -49,12 +57,32 @@ describe("classify", () => {
       "car.petrol",
     );
   });
-  it("Meezan inflow is funding without a category; Meezan outflow to a person stays spend", () => {
-    expect(out("From TEST USER (Meezan Bank (MBL))", 4000000, "sadapay")).toMatchObject({
+  it("Meezan inflow from you is funding; from someone else at Meezan it's income", () => {
+    const me = withRows(ds, { counterparties: [cp("Test User", { kind: "self", aliases: ["TEST USER"] })] });
+    const run = (d: typeof ds, description: string, amount: number) =>
+      classify(d, { account_id: "sadapay", amount, description, reason: null, bank_type: null });
+    expect(run(me, "From TEST USER (Meezan Bank (MBL))", 4000000)).toMatchObject({
       flow: "funding",
       category_id: null,
     });
+    expect(run(me, "From OTHER PERSON (Meezan Bank (MBL))", 300000).flow).toBe("income");
+    // an unknown named sender isn't assumed to be you
+    expect(run(ds, "From OTHER PERSON (Meezan Bank (MBL))", 300000).flow).toBe("income");
     expect(out("Outgoing fund transfer to Ali Meezan-0000", -20000).flow).toBe("spend");
+  });
+  it("Food Panda card spends are Food by default; Spotify is a subscription", () => {
+    expect(out("Food Panda 18th Floor, Office # 1-4, Karachi Si Pak", -278799, "sadapay")).toMatchObject({
+      flow: "spend",
+      category_id: "food",
+      counterparty_name: "Food Panda",
+    });
+    expect(
+      out("Spotify*p48f8f2310 Regeringsgatan 19 Spotify.com 111 53 Ab Swe", -79397, "sadapay"),
+    ).toMatchObject({
+      category_id: "subscriptions",
+      counterparty_name: "Spotify",
+    });
+    expect(out("Food Panda Pro subscription", -50000, "sadapay").category_id).toBe("subscriptions.foodpanda");
   });
   it("own-account / top-up inflows are funding", () => {
     expect(out("Own account transfer", 100000).flow).toBe("funding");
@@ -182,5 +210,49 @@ describe("matchProvisional", () => {
     expect(
       matchProvisional([row("x1", "2026-11-06T11:00", -500, "Outgoing fund transfer to Danish")], [a, b]),
     ).toEqual([{ external_id: "x1", txn_id: "pb" }]);
+  });
+});
+
+describe("merchant names", () => {
+  it.each([
+    ["Food Panda 18th Floor, Office # 1-4, Karachi Si Pak", "Food Panda"],
+    ["Spotify*p48f8f2310 Regeringsgatan", "Spotify"],
+    ["19 Spotify.com 111 53 Ab Swe", "Spotify"],
+    ["F-11 (CRUMBLE - ISD-RWP) KARACHI PK Visa x0000", "CRUMBLE"],
+    ["Dwatson Pharmacy And GrocIslamabad PK Visa x0000", "Dwatson Pharmacy And Groc"],
+  ])("%s → %s", (raw, name) => {
+    expect(merchantName(raw)).toBe(name);
+  });
+});
+
+describe("rememberRule (Always tag … like this)", () => {
+  const all = [
+    "From ARQAM (Meezan Bank (MBL))",
+    "Incoming fund transfer from Arqam Meezan-0000",
+    "From ARQAM (NayaPay)",
+    "To ARQAM (NayaPay)",
+    "From NISAR FATIMA (Meezan Bank (MBL))",
+  ];
+  const hits = (d: string) => {
+    const r = rememberRule(d);
+    if (!r) throw new Error(`no rule for ${d}`);
+    return all.filter((x) => new RegExp(r.pattern, "i").test(x));
+  };
+  it("keeps the bank/wallet and direction, so your Meezan and NayaPay transfers never share a rule", () => {
+    expect(hits("From ARQAM (Meezan Bank (MBL))")).toEqual(all.slice(0, 2));
+    expect(hits("From ARQAM (NayaPay)")).toEqual(["From ARQAM (NayaPay)"]);
+    expect(hits("To ARQAM (NayaPay)")).toEqual(["To ARQAM (NayaPay)"]);
+    expect(hits("From NISAR FATIMA (Meezan Bank (MBL))")).toEqual(["From NISAR FATIMA (Meezan Bank (MBL))"]);
+  });
+  it("labels the rule in words, and describeRule reads it back", () => {
+    const r = rememberRule("From ARQAM (Meezan Bank (MBL))");
+    expect(r?.label).toBe("From Arqam · Meezan");
+    expect(describeRule(r?.pattern ?? "")).toBe("From Arqam · Meezan");
+    expect(rememberRule("Food Panda 18th Floor, Office # 1-4")?.label).toBe("Food Panda");
+  });
+  it("isHolder matches part of the statement holder's name", () => {
+    expect(isHolder("ARQAM", "Arqam Zia")).toBe(true);
+    expect(isHolder("NISAR FATIMA", "Arqam Zia")).toBe(false);
+    expect(isHolder("ARQAM", null)).toBe(false);
   });
 });
