@@ -1,9 +1,21 @@
-@import "tailwindcss";
+/*
+ * Cascade order (Astryx + Tailwind v4 bridge): reset lowest, Tailwind preflight, Astryx components and theme,
+ * then utilities last so a className can still adjust a component. This file is imported first in main.tsx.
+ */
+@layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "@astryxdesign/core/reset.css";
+@import "@astryxdesign/core/astryx.css";
+@import "@astryxdesign/core/tailwind-theme.css";
 @import "./tokens.css";
 @import "./fonts.css";
+@import "tailwindcss/utilities.css" layer(utilities);
 
-/* Map tokens into Tailwind utilities (bg-surface, text-fg-muted, rounded-card, …). */
-@theme inline {
+/* App token names as Tailwind utilities (bg-surface, text-fg-muted, rounded-card, …). `reference`: emit no
+ * variables, so nothing here can shadow an Astryx token of the same name (--color-accent, --radius-inner). */
+@theme reference inline {
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
@@ -59,7 +71,6 @@
     background: var(--bg);
     color: var(--fg);
     font-family: var(--font-text);
-    font-feature-settings: "ss01";
     -webkit-font-smoothing: antialiased;
     min-height: 100dvh;
     overscroll-behavior-y: none;

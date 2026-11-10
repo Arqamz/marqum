@@ -1,108 +1,58 @@
 /*
- * Design tokens — the only place colour, radius, type and motion values live (docs/DESIGN.md).
- * Contrast (WCAG): fg/bg ≥ 15:1, muted/bg ≥ 6:1, accent/surface ≥ 6:1, semantic text ≥ 4.5:1 in both themes.
+ * App token names, all resolved from the active Astryx theme (src/themes/marqum). No colour is defined here:
+ * change the theme, not this file. Light/dark comes from the theme's light-dark() values.
  */
 :root {
-  color-scheme: light;
+  --bg: var(--color-background-body);
+  --surface: var(--color-background-card);
+  --surface-2: var(--color-background-muted);
+  --surface-3: var(--color-neutral);
+  --fg: var(--color-text-primary);
+  --fg-muted: var(--color-text-secondary);
+  --fg-subtle: var(--color-text-secondary);
+  --border: var(--color-border);
+  --border-strong: var(--color-border-emphasized);
+  --overlay: var(--color-overlay);
 
-  /* neutrals: warm paper */
-  --bg: #f7f6f2;
-  --surface: #fdfcf9;
-  --surface-2: #efede7;
-  --surface-3: #e4e1d9;
-  --fg: #16181d;
-  --fg-muted: #55565c;
-  --fg-subtle: #6a6b71;
-  --border: #dfdcd3;
-  --border-strong: #c6c2b8;
-  --overlay: rgb(22 24 29 / 0.42);
+  --accent: var(--color-accent);
+  --accent-fg: var(--color-on-accent);
+  --accent-text: var(--color-text-accent);
+  --accent-soft: var(--color-accent-muted);
 
-  /* accent = ink: primary action, current selection, focus — nothing else */
-  --accent: #16181d;
-  --accent-fg: #f4f1ea;
-  --accent-text: #16181d;
-  --accent-soft: #e8e5dd;
+  --pos: var(--color-text-success);
+  --pos-soft: var(--color-success-muted);
+  --neg: var(--color-text-error);
+  --neg-soft: var(--color-error-muted);
+  --warn: var(--color-text-warning);
+  --warn-soft: var(--color-warning-muted);
+  --warn-line: var(--color-border-warning);
 
-  /* semantic */
-  --pos: #157a3b;
-  --pos-soft: #e3f3e8;
-  --neg: #b42318;
-  --neg-soft: #fbe7e5;
-  --warn: #9a5200;
-  --warn-soft: #fcefd9;
-  --warn-line: #d98a1c;
+  --chart-bar: var(--color-border-emphasized);
+  --chart-bar-current: var(--color-text-primary);
+  --chart-in: var(--color-border-emphasized);
+  --chart-out: var(--color-text-primary);
+  --chart-grid: var(--color-border);
+  --chart-band: var(--color-background-muted);
 
-  /* charts */
-  --chart-bar: #a19e96;
-  --chart-bar-current: #3a3b40;
-  --chart-in: #b7b3a9;
-  --chart-out: #3a3b40;
-  --chart-grid: #e4e1d9;
-  --chart-band: #e6e2d8;
+  --shadow-float: var(--shadow-high);
 
-  /* shadows — only for floating things */
-  --shadow-float: 0 12px 32px rgb(16 16 20 / 0.16), 0 2px 6px rgb(16 16 20 / 0.08);
+  --radius-sheet: var(--radius-page);
+  --radius-card: var(--radius-container);
+  --radius-control: var(--radius-element);
+  --radius-chip: var(--radius-full);
 
-  /* radius: inner = outer − padding */
-  --radius-sheet: 28px;
-  --radius-card: 20px; /* with 12px padding → 8px inside, with 16px padding → 4px inside */
-  --radius-control: 12px;
-  --radius-inner: 8px;
-  --radius-chip: 4px;
+  --font-text: var(--font-family-body);
+  --font-display: var(--font-family-heading);
+  --font-mono: var(--font-family-code);
+  --text-hero: 3.25rem;
+  --text-headline: 1.5rem;
 
-  /* type */
-  --font-text: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "PP Neue Montreal", "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
-  --text-hero: 3.5rem; /* 56px: the net position, largest type in the app */
-  --text-headline: 1.625rem; /* 26px */
+  --ease-out: var(--ease-entrance, cubic-bezier(0.22, 1, 0.36, 1));
+  --dur: var(--duration-fast);
 
-  /* motion */
-  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur: 200ms;
-
-  /* layout */
   --tabbar-h: 64px;
   --topbar-h: 56px;
   --content-max: 40rem;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --bg: #121214;
-    --surface: #1a1a1d;
-    --surface-2: #232327;
-    --surface-3: #2d2d32;
-    --fg: #f4f1ea;
-    --fg-muted: #aba9a2;
-    --fg-subtle: #918f89;
-    --border: #2a2a2f;
-    --border-strong: #3d3d43;
-    --overlay: rgb(0 0 0 / 0.6);
-
-    --accent: #f4f1ea;
-    --accent-fg: #16181d;
-    --accent-text: #f4f1ea;
-    --accent-soft: #2d2d32;
-
-    --pos: #4cc77a;
-    --pos-soft: #13291c;
-    --neg: #ff7a6e;
-    --neg-soft: #34171a;
-    --warn: #f2b13c;
-    --warn-soft: #2f2410;
-    --warn-line: #c98b22;
-
-    --chart-bar: #6f6d68;
-    --chart-bar-current: #d9d5cc;
-    --chart-in: #6f6d68;
-    --chart-out: #d9d5cc;
-    --chart-grid: #26262a;
-    --chart-band: #2c2b2e;
-
-    --shadow-float: 0 12px 32px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.3);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
