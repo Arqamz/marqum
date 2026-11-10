@@ -40,9 +40,9 @@ export function topCategoryOf(id: string | null, l: Lookup): Category | undefine
 export const FLOW_LABEL: Record<Flow, string> = {
   spend: "Spending",
   fee: "Fee",
-  funding: "Funding",
+  funding: "Income from Meezan",
   internal: "Between wallets",
-  income: "Income",
+  income: "Money from others",
   loan_in: "Loan received",
   loan_repay: "Loan repayment",
   reimbursement: "Paid back to me",
@@ -50,7 +50,7 @@ export const FLOW_LABEL: Record<Flow, string> = {
 };
 
 export const OUT_FLOWS: Flow[] = ["spend", "internal", "loan_repay", "fee"];
-export const IN_FLOWS: Flow[] = ["income", "funding", "internal", "loan_in", "reimbursement"];
+export const IN_FLOWS: Flow[] = ["funding", "internal", "income", "reimbursement", "loan_in"];
 
 export const needsTag = (t: Transaction): boolean =>
   (t.flow === "spend" || t.flow === "fee") && t.category_id === null;
