@@ -91,7 +91,7 @@ smallest time gap, then most shared description words, then by id (so the result
 7. Rows dated before tracking start are ignored, and the replace range starts at tracking start.
 8. System rows (b/f, c/f) are never deleted or changed by an import.
 9. If the statement spans tracking start and has an opening, the first month's b/f becomes opening + Σ statement
-   rows before tracking start, unless you set it with `setOpeningBalance`.
+   rows before tracking start. A statement always wins, even over an opening you typed.
 
 10. A new fee row (e.g. "International transaction tax") within ±48 hours of a matched notification is classified
     `fee` / `fees` and reported as `fees: [{ external_id, near_txn_id }]`, so the UI can show it next to the
@@ -115,7 +115,10 @@ typed, is an **assertion**: it is checked against the ledger, but it never sets 
   amount comes from:
   - the opening of a statement that spans tracking start (+ its rows before tracking start);
   - else 0, recorded as "unknown";
-  - `setOpeningBalance` overrides it ("Opening balance set by you"), and later imports don't change it.
+  - `setOpeningBalance` sets it ("Opening balance set by you") when no statement gives one; it is refused when the
+    opening came from a statement, and a later statement with an opening replaces a typed one;
+  - **match the bank:** typing today's bank balance B sets opening = B − (ledger balance now − current opening),
+    so the balance matches exactly and every transaction stays as it is (`openingToMatch`).
 
   It can't be changed once that month is closed.
 - **closeMonth(M)** writes c/f(M) = −closing(M) and b/f(M+1) = +closing(M) for each wallet. They are part of M's

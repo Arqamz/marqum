@@ -8,6 +8,7 @@ import {
   monthLedger,
   monthOf,
   netPosition,
+  openingInfo,
   parseRs,
   setting,
 } from "@marqum/core";
@@ -16,6 +17,7 @@ import { API } from "@marqum/schema";
 import { Link } from "@tanstack/react-router";
 import { ChevronRight, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { BalanceSheet } from "../components/balance-sheet.tsx";
 import { CategoryIcon } from "../components/category-icon.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { Money } from "../components/money.tsx";
@@ -30,7 +32,7 @@ import { auth } from "../lib/auth.ts";
 import { enqueue, newId } from "../lib/commands.ts";
 import { isNative } from "../lib/platform.ts";
 import { biometricEnrolled, enrolBiometric, registerPasskey, stepUp } from "../lib/stepup.ts";
-import { resetLocalData } from "../lib/sync.ts";
+import { reloadFromServer, resetLocalData } from "../lib/sync.ts";
 import { toast } from "../lib/toast.ts";
 import { firstTrackedMonth, testRunNote } from "../lib/tracking.ts";
 import { lookup } from "../lib/view.ts";
@@ -59,6 +61,12 @@ function Row({ children, onClick }: { children: ReactNode; onClick?: (() => void
     <div className={cls}>{children}</div>
   );
 }
+
+const OPENING_LABEL = {
+  statement: "from the statement",
+  you: "set by you",
+  none: "not set — type today's balance above",
+} as const;
 
 function SettingsContent({ ds, now }: { ds: Dataset; now: string }) {
   const np = useMemo(() => netPosition(ds, now), [ds, now]);
@@ -102,11 +110,22 @@ function SettingsContent({ ds, now }: { ds: Dataset; now: string }) {
                 </span>
                 <Money value={w.balance} className="font-medium" />
               </Row>
-              <Row onClick={() => setOpeningFor(w.account_id)}>
-                <span className="text-sm text-fg-muted">Opening balance, 1 {monthLabel(firstMonth)}</span>
+              <Row
+                {...(openingInfo(ds, w.account_id).source === "statement"
+                  ? {}
+                  : { onClick: () => setOpeningFor(w.account_id) })}
+              >
+                <span className="flex flex-col text-sm text-fg-muted">
+                  <span>Opening balance, 1 {monthLabel(firstMonth)}</span>
+                  <span className="text-fg-subtle">
+                    {OPENING_LABEL[openingInfo(ds, w.account_id).source]}
+                  </span>
+                </span>
                 <span className="flex items-center gap-2 text-sm text-fg-muted">
                   <Money value={openings[w.account_id] ?? 0} />
-                  <ChevronRight className="text-fg-subtle" aria-label="Set opening balance" />
+                  {openingInfo(ds, w.account_id).source === "statement" ? null : (
+                    <ChevronRight className="text-fg-subtle" aria-label="Set opening balance" />
+                  )}
                 </span>
               </Row>
               {w.unaccounted !== 0 ? (
@@ -150,6 +169,19 @@ function SettingsContent({ ds, now }: { ds: Dataset; now: string }) {
               <span>Statements and imports</span>
               <ChevronRight className="text-fg-subtle" aria-hidden />
             </Link>
+          </Row>
+          <Row
+            onClick={async () => {
+              await reloadFromServer();
+              toast({ tone: "neutral", title: "Reloaded from the server" });
+            }}
+          >
+            <span className="flex flex-col">
+              <span>Reload from the server</span>
+              <span className="text-sm text-fg-muted">
+                Rebuilds this device's copy. Unsent changes are kept.
+              </span>
+            </span>
           </Row>
           <Row
             onClick={async () => {
@@ -404,49 +436,6 @@ function DevicesSection() {
         </ul>
       )}
     </Section>
-  );
-}
-
-function BalanceSheet({
-  ds,
-  account,
-  onClose,
-}: {
-  ds: Dataset;
-  account: AccountId | null;
-  onClose: () => void;
-}) {
-  const name = ds.accounts.find((a) => a.id === account)?.name ?? "";
-  const [v, setV] = useState("");
-  const paisa = parseRs(v);
-  return (
-    <Sheet
-      open={account !== null}
-      onOpenChange={(o) => !o && onClose()}
-      title={`${name} balance right now`}
-      description="Open the bank app and type what it shows. Any gap shows up as unaccounted."
-    >
-      <form
-        className="flex flex-col gap-4"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!account || paisa === null) return;
-          void enqueue("recordBalance", {
-            entry_id: newId(),
-            account_id: account,
-            balance: paisa,
-            as_of: karachiNow(),
-          });
-          setV("");
-          onClose();
-        }}
-      >
-        <MoneyInput label="Balance" value={v} onChange={setV} autoFocus />
-        <Button type="submit" variant="primary" size="lg" disabled={paisa === null}>
-          Save balance
-        </Button>
-      </form>
-    </Sheet>
   );
 }
 

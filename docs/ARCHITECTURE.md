@@ -177,6 +177,11 @@ From the **25th**, a daily local notification (no push server needed) starts the
 | Month-close snapshots in R2 under bucket lock               | accidental or malicious deletion; locked objects can't be deleted |
 | Full replica on each device + "export to phone"             | losing the Cloudflare account                                     |
 
+**Replica integrity.** The last page of every pull carries a digest (count and version-sum of the server's live
+rows). A device whose replica doesn't match it, or whose stored ledger epoch differs (or is missing on a replica
+that has synced before), drops its replica and pulls again from 0, keeping commands not yet sent. Settings ›
+Reload from the server does the same on demand.
+
 The local replica alone is **not** a backup: clearing app data or uninstalling the app wipes it. The cloud layers are what make data loss unlikely.
 
 ## Categories

@@ -45,7 +45,24 @@ async function api<T = Record<string, unknown>>(
 }
 
 type Row = Record<string, unknown> & { id: string };
-type Pull = { version: number; changes: Record<string, Row[]>; more: boolean; epoch: string };
+type Pull = {
+  version: number;
+  changes: Record<string, Row[]>;
+  more: boolean;
+  epoch: string;
+  digest?: { rows: number; version_sum: number };
+};
+const digestOf = (rep: Record<string, Map<string, Row>>) => {
+  let rows = 0;
+  let version_sum = 0;
+  for (const m of Object.values(rep))
+    for (const r of m.values())
+      if (!r.deleted) {
+        rows++;
+        version_sum += Number(r.version);
+      }
+  return { rows, version_sum };
+};
 type Push = {
   results: { id: string; ok: boolean; error?: string; message?: string; result?: Record<string, unknown> }[];
   version: number;
@@ -78,7 +95,16 @@ async function pullAll(): Promise<Record<string, Row[]>> {
       changed[tbl] = [...(changed[tbl] ?? []), ...rows];
     }
     cursor = json.version;
-    if (!json.more) return changed;
+    if (!json.more) {
+      check(json.digest !== undefined, "last pull page carries a digest", json);
+      const d = digestOf(replica);
+      check(
+        d.rows === json.digest?.rows && d.version_sum === json.digest?.version_sum,
+        "replica matches the server digest",
+        { local: d, server: json.digest },
+      );
+      return changed;
+    }
   }
 }
 const live = (tbl: string) => [...(replica[tbl]?.values() ?? [])].filter((r) => !r.deleted);
@@ -593,6 +619,29 @@ await push([importCmd(await readCsvStatement(NAYA_OCT), "m-10-2026.csv")]);
 
   const delta = await api<Pull>("GET", `/api/sync/pull?since=${cursor}`);
   check(delta.json.epoch !== epochBefore, "pull reports the new epoch");
+  // Regression (prod bug): a replica that ignores the epoch and just applies the delta keeps rows the reset
+  // hard-deleted. The digest must expose that so the client rebuilds itself.
+  {
+    const stale: Record<string, Map<string, Row>> = {};
+    for (const [t, m] of Object.entries(replica)) stale[t] = new Map(m);
+    let since = cursor;
+    let last = delta.json;
+    for (;;) {
+      for (const [t, rows] of Object.entries(last.changes)) {
+        stale[t] ??= new Map();
+        for (const r of rows) stale[t].set(r.id, r);
+      }
+      if (!last.more) break;
+      since = last.version;
+      last = (await api<Pull>("GET", `/api/sync/pull?since=${since}`)).json;
+    }
+    const d = digestOf(stale);
+    check(
+      last.digest !== undefined && (d.rows !== last.digest.rows || d.version_sum !== last.digest.version_sum),
+      "digest exposes a stale pre-reset replica",
+      { local: d, server: last.digest },
+    );
+  }
   await pullAll(); // sees the epoch change → full re-pull from 0
   check(
     !live("transactions").some((t) => t.flow !== "carry"),

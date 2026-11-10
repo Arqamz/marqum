@@ -7,12 +7,15 @@ import {
   monthLedger,
   monthsToClose,
   netPosition,
+  openingInfo,
+  openingToMatch,
   trackedMonths,
   walletMonthDetail,
 } from "../src/analytics.ts";
 import { buildSnapshot, closeChecklist } from "../src/close.ts";
 import { execute } from "../src/commands.ts";
 import { applyMutations, emptyDataset, seedMutations, trackingStart } from "../src/dataset.ts";
+import { balanceAt } from "../src/ledger.ts";
 import type { Dataset } from "../src/types.ts";
 import { apply, cmd, ctx, importCmd, parsed, prov, rowsOf, seeded, srow, txn, withRows } from "./builders.ts";
 
@@ -125,7 +128,7 @@ describe("tracking start", () => {
 });
 
 describe("opening balance (first-month b/f)", () => {
-  it("comes from the statement opening, or setOpeningBalance, which a later import doesn't override", () => {
+  it("comes from the statement opening, or setOpeningBalance; a statement always wins", () => {
     const ds = november();
     expect(bf(ds, "nayapay", "2026-11")).toMatchObject({
       amount: 500000,
@@ -139,13 +142,42 @@ describe("opening balance (first-month b/f)", () => {
       amount: 200000,
       reason: "Opening balance set by you",
     });
-    const set = run(ds, cmd("setOpeningBalance", { account_id: "nayapay", amount: 450000 }));
+    expect(openingInfo(ds, "nayapay")).toEqual({ amount: 500000, source: "statement" });
+    expect(openingInfo(ds, "sadapay")).toEqual({ amount: 200000, source: "you" });
+    // typing over a statement opening is refused
+    const refused = execute(
+      ds,
+      cmd("setOpeningBalance", { account_id: "nayapay", amount: 450000 }),
+      ctx(DEC2),
+    );
+    expect(refused).toMatchObject({ ok: false, error: "invalid" });
+    // a statement replaces an opening you typed
+    const typed = {
+      ...ds,
+      transactions: ds.transactions.map((t) =>
+        t.id === "carry:bf:nayapay:2026-11"
+          ? { ...t, amount: 450000, reason: "Opening balance set by you" }
+          : t,
+      ),
+    };
     const reimport = execute(
-      set,
+      typed,
       importCmd(parsed("nayapay", "2026-11-01", "2026-11-07", [], 500000, 500000), "c".repeat(64)),
       ctx(DEC2),
     );
-    expect(bf(apply(set, reimport.mutations), "nayapay", "2026-11")?.amount).toBe(450000);
+    expect(bf(apply(typed, reimport.mutations), "nayapay", "2026-11")).toMatchObject({
+      amount: 500000,
+      reason: "Opening balance from statement",
+    });
+  });
+  it("openingToMatch: the opening that makes today's balance equal what the bank shows", () => {
+    const ds = november();
+    const at = "2026-11-30T12:00";
+    const now = balanceAt(ds, "sadapay", at);
+    const opening = openingToMatch(ds, "sadapay", now + 12345, at);
+    expect(opening).toBe(200000 + 12345);
+    const fixed = run(ds, cmd("setOpeningBalance", { account_id: "sadapay", amount: opening }));
+    expect(balanceAt(fixed, "sadapay", at)).toBe(now + 12345);
   });
   it("your own name seen on an internal transfer becomes a self counterparty, so later transfers stay internal", () => {
     const ds = november();

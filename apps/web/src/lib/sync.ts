@@ -150,14 +150,16 @@ function reportResult(c: Command, r: Record<string, unknown>): void {
 }
 
 async function pull(): Promise<void> {
+  let repaired = false;
   for (let page = 0; page < 1000; page++) {
     const since = await getMeta<number>("version", 0);
     const res = await api<PullResponse>(`${API.pull}?since=${since}`);
     const stored = await getMeta<string | null>("epoch", null);
-    if (res.epoch && stored !== null && stored !== res.epoch) {
-      // The ledger was reset on the server: this replica belongs to the old epoch. Start over from 0.
-      await wipeForEpoch(res.epoch);
-      toast({ tone: "neutral", title: "Ledger was reset — reloaded" });
+    // A replica from another epoch — or one synced before epochs existed (stored = null but rows pulled) —
+    // still holds rows the server deleted outright on reset. Start over from 0.
+    if (res.epoch && stored !== res.epoch && (stored !== null || since > 0)) {
+      await rebuildReplica(res.epoch, true);
+      if (stored !== null) toast({ tone: "neutral", title: "Ledger was reset — reloaded" });
       continue;
     }
     const tables = TABLE_NAMES.filter((t) => (res.changes[t]?.length ?? 0) > 0);
@@ -171,17 +173,59 @@ async function pull(): Promise<void> {
       // Server state now includes the acknowledged commands, so their optimistic preview can go.
       if (!res.more) await db.outbox.filter((e) => e.acked === true).delete();
     });
-    if (!res.more) return;
+    if (res.more) continue;
+    // Integrity check: after a full pull the replica must hold exactly the server's live rows.
+    if (res.digest) {
+      const local = await localDigest();
+      if (local.rows !== res.digest.rows || local.version_sum !== res.digest.version_sum) {
+        if (repaired) throw new Error("This device's copy doesn't match the server — pull to refresh again");
+        repaired = true;
+        await rebuildReplica(res.epoch);
+        toast({ tone: "neutral", title: "Fixed this device's copy from the server" });
+        continue;
+      }
+    }
+    return;
   }
 }
 
-/** Drop every replicated row, the outbox and the imported-file memory; keep only the new epoch. */
-async function wipeForEpoch(epoch: string): Promise<void> {
-  await db.transaction("rw", db.tables, async () => {
-    for (const t of db.tables) await t.clear();
-    await setMeta("epoch", epoch);
-    await setMeta("version", 0);
-  });
+/** Count and version-sum of live replicated rows (same definition as the server's digest). */
+export async function localDigest(): Promise<{ rows: number; version_sum: number }> {
+  let rows = 0;
+  let version_sum = 0;
+  for (const t of TABLE_NAMES) {
+    await db.table(t).each((r: { version?: number; deleted?: boolean }) => {
+      if (r.deleted === true) return;
+      rows++;
+      version_sum += r.version ?? 0;
+    });
+  }
+  return { rows, version_sum };
+}
+
+/**
+ * Drop every replicated row and re-pull from 0 under `epoch`. Unsent commands stay queued (they are pushed
+ * again and the server decides); acknowledged ones are already in server state.
+ */
+async function rebuildReplica(epoch: string, newEpoch = false): Promise<void> {
+  await db.transaction(
+    "rw",
+    [db.meta, db.outbox, db.intake, ...TABLE_NAMES.map((t) => db.table(t))],
+    async () => {
+      for (const t of TABLE_NAMES) await db.table(t).clear();
+      // after a ledger reset, statement files seen before it may be imported again
+      if (newEpoch) await db.intake.clear();
+      await db.outbox.filter((e) => e.acked === true).delete();
+      await setMeta("epoch", epoch);
+      await setMeta("version", 0);
+    },
+  );
+}
+
+/** Settings › "Reload from server": rebuild this device's copy now. */
+export async function reloadFromServer(): Promise<void> {
+  await rebuildReplica(await getMeta<string>("epoch", ""));
+  await syncNow();
 }
 
 /** For tests and logout. */

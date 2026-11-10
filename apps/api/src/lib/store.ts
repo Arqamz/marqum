@@ -39,6 +39,7 @@ export interface PullPage {
   changes: Record<string, Record<string, unknown>[]>;
   more: boolean;
   epoch: string;
+  digest?: { rows: number; version_sum: number };
 }
 
 /** Tables wiped by resetLedger (configuration tables are kept). */
@@ -107,11 +108,20 @@ export async function loadDataset(db: D1Database): Promise<Dataset> {
 export async function pull(db: D1Database, since: number): Promise<PullPage> {
   const global = await currentVersion(db);
   const from = since > global ? 0 : since; // server was reset/restored → resend everything
-  const { results } = await db
-    .prepare("SELECT tbl, id, version, deleted, data FROM rows WHERE version > ? ORDER BY version LIMIT ?")
-    .bind(from, PULL_LIMIT + 1)
-    .all<RowRecord>();
-  return { ...pullPage(results, from), epoch: await getEpoch(db) };
+  // One batch = one consistent snapshot: the page and the digest describe the same state.
+  const [page, totals] = await db.batch([
+    db
+      .prepare("SELECT tbl, id, version, deleted, data FROM rows WHERE version > ? ORDER BY version LIMIT ?")
+      .bind(from, PULL_LIMIT + 1),
+    db.prepare(
+      "SELECT COUNT(*) AS n, COALESCE(SUM(version), 0) AS s, COALESCE(MAX(version), 0) AS v FROM rows WHERE deleted = 0",
+    ),
+  ]);
+  const shaped = pullPage((page?.results ?? []) as RowRecord[], from);
+  const t = (totals?.results?.[0] ?? { n: 0, s: 0, v: 0 }) as { n: number; s: number; v: number };
+  // Only meaningful when this page reaches the newest live row.
+  const digest = !shaped.more && t.v <= shaped.version ? { rows: t.n, version_sum: t.s } : undefined;
+  return { ...shaped, epoch: await getEpoch(db), ...(digest ? { digest } : {}) };
 }
 
 const UPSERT = `INSERT INTO rows (tbl, id, version, deleted, data)

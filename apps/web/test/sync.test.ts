@@ -112,4 +112,36 @@ describe("sync engine", () => {
     expect(toasts.get().at(-1)?.title).toBe("Ledger was reset — reloaded");
     expect(dataset.loans[0]?.lender).toBe("Mom"); // configuration survives
   });
+
+  it("rebuilds a replica synced before epochs existed (prod bug: duplicates after a reset)", async () => {
+    const server = await signedIn();
+    await syncNow();
+    const before = (await loadDataset()).dataset.transactions.length;
+    expect(before).toBeGreaterThan(0);
+    // An old app version never stored the epoch; then the ledger was reset (rows hard-deleted, no tombstones).
+    await db.meta.delete("epoch");
+    server.resetElsewhere();
+    await syncNow();
+    const { dataset } = await loadDataset();
+    expect(dataset.transactions).toHaveLength(0);
+    expect(syncState.get().status).toBe("synced");
+  });
+
+  it("repairs a replica that drifted from the server (digest mismatch) and keeps unsent commands", async () => {
+    const server = await signedIn();
+    await syncNow();
+    const real = server.dataset().transactions.length;
+    // a stray row the server doesn't have (e.g. left over from an old epoch)
+    const ghost = { ...(await db.table("transactions").toArray())[0], id: "ghost", version: 1 };
+    await db.table("transactions").put(ghost);
+    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("offline")));
+    await enqueue("setSetting", { key: "avg_window", value: "3" });
+    vi.stubGlobal("fetch", server.fetch);
+    await syncNow();
+    const { dataset } = await loadDataset();
+    expect(dataset.transactions.some((t) => t.id === "ghost")).toBe(false);
+    expect(dataset.transactions).toHaveLength(real);
+    expect(toasts.get().some((t) => t.title === "Fixed this device's copy from the server")).toBe(true);
+    expect(server.log.at(-1)?.name).toBe("setSetting");
+  });
 });

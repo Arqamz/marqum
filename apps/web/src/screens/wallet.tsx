@@ -6,11 +6,14 @@ import {
   isClosed,
   monthLabel,
   monthOf,
+  openingInfo,
+  trackingStartMonth,
   walletMonthDetail,
 } from "@marqum/core";
 import type { AccountId, Transaction } from "@marqum/schema";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
+import { BalanceSheet } from "../components/balance-sheet.tsx";
 import { BalanceLine } from "../components/charts.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { Money } from "../components/money.tsx";
@@ -18,6 +21,7 @@ import { MonthPager } from "../components/month-pager.tsx";
 import { Screen, Section } from "../components/shell.tsx";
 import { TagSheet } from "../components/tag-sheet.tsx";
 import { TxnList, virtualBroughtForward } from "../components/txn-list.tsx";
+import { Button } from "../components/ui/button.tsx";
 import { Skeleton } from "../components/ui/controls.tsx";
 import { lookup } from "../lib/view.ts";
 
@@ -55,6 +59,9 @@ export function carryRows(
 function WalletContent({ ds, now, id, month }: { ds: Dataset; now: string; id: AccountId; month: string }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState<string | null>(null);
+  const [matching, setMatching] = useState(false);
+  const opening = openingInfo(ds, id);
+  const firstMonth = month === trackingStartMonth(ds);
   const l = useMemo(() => lookup(ds), [ds]);
   const months = useMemo(() => {
     const list = availableMonths(ds, now);
@@ -77,10 +84,19 @@ function WalletContent({ ds, now, id, month }: { ds: Dataset; now: string; id: A
           <p className="text-sm text-fg-muted">
             {current ? "balance now" : `closing balance, ${monthLabel(month)}`}
           </p>
+          {current ? (
+            <Button variant="text" size="sm" className="self-start" onClick={() => setMatching(true)}>
+              Check against the bank app
+            </Button>
+          ) : null}
         </div>
         <dl className="flex flex-col gap-2 text-sm" data-testid="wallet-ledger">
           <div className="flex justify-between gap-4">
-            <dt className="text-fg-muted">Brought forward from {monthLabel(addMonths(month, -1))}</dt>
+            <dt className="text-fg-muted">
+              {firstMonth
+                ? `Opening balance · ${opening.source === "statement" ? "from statement" : opening.source === "you" ? "set by you" : "not set"}`
+                : `Brought forward from ${monthLabel(addMonths(month, -1))}`}
+            </dt>
             <dd className="num">{formatRs(d.brought_forward)}</dd>
           </div>
           <div className="flex justify-between gap-4">
@@ -112,6 +128,7 @@ function WalletContent({ ds, now, id, month }: { ds: Dataset; now: string; id: A
           isClosedMonth={(m) => isClosed(ds, m)}
         />
       </Section>
+      <BalanceSheet ds={ds} account={matching ? id : null} onClose={() => setMatching(false)} />
       <TagSheet
         txn={open ? (ds.transactions.find((t) => t.id === open) ?? null) : null}
         onClose={() => setOpen(null)}

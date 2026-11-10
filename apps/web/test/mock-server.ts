@@ -102,7 +102,24 @@ export class MockServer {
         const rows = [...(this.rows.get(t)?.values() ?? [])].filter((r) => r.version > since);
         if (rows.length) changes[t] = rows;
       }
-      return { status: 200, body: { version: this.version, changes, more: false, epoch: this.epoch } };
+      let rows = 0;
+      let version_sum = 0;
+      for (const m of this.rows.values())
+        for (const r of m.values())
+          if (r.deleted !== true) {
+            rows++;
+            version_sum += r.version;
+          }
+      return {
+        status: 200,
+        body: {
+          version: this.version,
+          changes,
+          more: false,
+          epoch: this.epoch,
+          digest: { rows, version_sum },
+        },
+      };
     }
     const check = path.match(/^\/api\/months\/(\d{4}-\d{2})\/check$/);
     if (check?.[1]) return { status: 200, body: closeChecklist(this.dataset(), check[1], this.now) };

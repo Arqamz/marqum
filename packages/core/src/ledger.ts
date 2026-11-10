@@ -3,7 +3,7 @@
  * re-exported from analytics.ts / planning.ts. Formulas are documented in docs/FORMULAS.md.
  */
 import type { AccountId, BalanceEntry, Goal, Loan, Recurring, Transaction } from "@marqum/schema";
-import { carryId, isCf } from "./carry.ts";
+import { carryId, isCf, OPENING_FROM_STATEMENT, OPENING_SET_BY_YOU } from "./carry.ts";
 import { numericSetting, trackingStart, trackingStartMonth } from "./dataset.ts";
 import { formatRs } from "./money.ts";
 import { addMonths, completeMonthsBefore, dayLabel, monthOf } from "./time.ts";
@@ -180,6 +180,27 @@ export function suggestOpeningBalance(
   if (!stated) return null;
   const amount = stated.balance - (balanceAt(ds, accountId, stated.as_of) - (bf?.amount ?? 0));
   return { amount, from: `${stated.source} ${dayLabel(stated.as_of)} ${stated.as_of.slice(11, 16)}` };
+}
+
+export type OpeningSource = "statement" | "you" | "none";
+
+/** The first tracked month's opening (b/f) for a wallet and where it came from. */
+export function openingInfo(ds: Dataset, account: AccountId): { amount: number; source: OpeningSource } {
+  const bf = ds.transactions.find(
+    (t) => t.id === carryId("bf", account, trackingStartMonth(ds)) && !t.deleted,
+  );
+  if (!bf) return { amount: 0, source: "none" };
+  const source: OpeningSource =
+    bf.reason === OPENING_FROM_STATEMENT ? "statement" : bf.reason === OPENING_SET_BY_YOU ? "you" : "none";
+  return { amount: bf.amount, source };
+}
+
+/**
+ * The opening that makes Marqūm's balance at `at` equal `balance` (what the bank app shows):
+ * balance − (ledger balance at `at` − current opening). Every recorded transaction is kept as is.
+ */
+export function openingToMatch(ds: Dataset, account: AccountId, balance: number, at: string): number {
+  return balance - (balanceAt(ds, account, at) - openingInfo(ds, account).amount);
 }
 
 function unaccountedHint(

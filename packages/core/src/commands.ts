@@ -31,6 +31,7 @@ import {
   USER_RULE_PRIORITY,
 } from "./dataset.ts";
 import { balanceAt, goalSaved } from "./ledger.ts";
+import { formatRs } from "./money.ts";
 import { matchProvisional } from "./reconcile.ts";
 import {
   addDays,
@@ -406,17 +407,15 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
   if (st.closing !== null) entry(toDT, st.closing, "statement_close");
   for (const b of oldEntries) if (!reused.has(b.id)) mutations.push(tombstone("balances", b));
 
-  // First tracked month's b/f = the balance at tracking start according to this statement (unless you set it).
+  // First tracked month's b/f = the balance at tracking start according to this statement. A statement is the
+  // source of truth, so it replaces an opening you typed or one derived from a notification.
   const start = trackingStart(ds);
   if (st.opening !== null && st.from <= start && st.to >= start) {
     const before = st.rows.filter((r) => r.occurred_at < startDT).reduce((sum, r) => sum + r.amount, 0);
     const amount = st.opening + before;
     const id = carryId("bf", acc, start.slice(0, 7));
     const bf = ds.transactions.find((t) => t.id === id && !t.deleted);
-    if (
-      bf?.reason !== OPENING_SET_BY_YOU &&
-      (bf?.amount !== amount || bf.reason !== OPENING_FROM_STATEMENT)
-    ) {
+    if (bf?.amount !== amount || bf.reason !== OPENING_FROM_STATEMENT) {
       const base = bf ?? carryRow("bf", acc, start.slice(0, 7), 0, now);
       mutations.push(
         mut("transactions", { ...base, amount, reason: OPENING_FROM_STATEMENT, updated_at: now }),
@@ -867,8 +866,13 @@ function setOpeningBalance(ds: Dataset, a: CommandArgs<"setOpeningBalance">, ctx
   const month = trackingStartMonth(ds);
   if (isClosed(ds, month)) return fail("closed_month", `${monthLabel(month)} is closed`);
   const id = carryId("bf", a.account_id, month);
-  const base =
-    ds.transactions.find((t) => t.id === id && !t.deleted) ?? carryRow("bf", a.account_id, month, 0, ctx.now);
+  const existing = ds.transactions.find((t) => t.id === id && !t.deleted);
+  if (existing?.reason === OPENING_FROM_STATEMENT && existing.amount !== a.amount)
+    return fail(
+      "invalid",
+      `This opening comes from a statement (${formatRs(existing.amount, { decimals: true })}) — statements are the source of truth`,
+    );
+  const base = existing ?? carryRow("bf", a.account_id, month, 0, ctx.now);
   return ok([
     mut("transactions", { ...base, amount: a.amount, reason: OPENING_SET_BY_YOU, updated_at: ctx.now }),
   ]);

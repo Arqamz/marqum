@@ -54,6 +54,12 @@ export const PullResponse = z.object({
    * drop its local replica and outbox, then pull from since=0.
    */
   epoch: z.string(),
+  /**
+   * On the last page (more = false): count and version-sum of every live row up to `version`. A replica that
+   * has pulled everything must match exactly; if it doesn't (rows the server no longer has, or missing rows),
+   * the client rebuilds itself from since=0.
+   */
+  digest: z.object({ rows: z.number().int(), version_sum: z.number().int() }).optional(),
 });
 
 /** Raw notification posted by the Android NotificationListenerService (only NayaPay/SadaPay packages). */

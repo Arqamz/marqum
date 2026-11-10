@@ -560,4 +560,10 @@ export function expectedCharges(ds: Dataset, month: string, now: string): Expect
   });
 }
 
-export { suggestOpeningBalance } from "./ledger.ts";
+export {
+  balanceAt,
+  type OpeningSource,
+  openingInfo,
+  openingToMatch,
+  suggestOpeningBalance,
+} from "./ledger.ts";
