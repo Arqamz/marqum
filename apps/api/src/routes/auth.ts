@@ -53,25 +53,32 @@ auth.get("/me", (c) => {
 
 auth.get("/devices", async (c) => {
   const { results } = await c.env.DB.prepare(
-    "SELECT id, name, created_at, last_seen, revoked_at, biometric_secret_hash IS NOT NULL AS biometric FROM devices ORDER BY created_at",
+    "SELECT id, name, created_at, last_seen, biometric_secret_hash IS NOT NULL AS biometric FROM devices WHERE revoked_at IS NULL ORDER BY created_at",
   ).all<{
     id: string;
     name: string;
     created_at: string;
     last_seen: string | null;
-    revoked_at: string | null;
     biometric: number;
   }>();
   const me = c.get("device").id;
   return c.json(results.map((d) => ({ ...d, biometric: d.biometric === 1, current: d.id === me })));
 });
 
+/** Revoke a device (idempotent: revoking an already-revoked device is fine). Revoked devices are not listed. */
 auth.delete("/devices/:id", async (c) => {
-  const res = await c.env.DB.prepare("UPDATE devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
-    .bind(isoNow(), c.req.param("id"))
-    .run();
-  if (!res.meta.changes) fail(404, "not_found", "No such active device.");
-  await c.env.DB.prepare("DELETE FROM step_up WHERE device_id = ?").bind(c.req.param("id")).run();
+  const id = c.req.param("id");
+  const row = await c.env.DB.prepare("SELECT revoked_at FROM devices WHERE id = ?")
+    .bind(id)
+    .first<{ revoked_at: string | null }>();
+  if (!row) fail(404, "not_found", "No such device.");
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").bind(
+      isoNow(),
+      id,
+    ),
+    c.env.DB.prepare("DELETE FROM step_up WHERE device_id = ?").bind(id),
+  ]);
   return c.json({ ok: true });
 });
 

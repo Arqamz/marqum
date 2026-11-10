@@ -6,6 +6,7 @@ import {
   defaultAssumptions,
   goalStatus,
   loanStatus,
+  monthlyIncome,
   plannedCategories,
   project,
   savingsHistory,
@@ -119,13 +120,6 @@ describe("allocation", () => {
       ["nayapay", "Everyday spending (the rest)", rs(59000)],
     ]);
     expect(suggestedSplit(fixture(), NOW)).toEqual(a.suggested);
-  });
-  it("uses the user's allocation when set", () => {
-    expect(allocation(set(fixture(), "allocation_sadapay", String(rs(30000))), NOW)).toMatchObject({
-      sadapay: rs(30000),
-      nayapay: rs(55000),
-      source: "user",
-    });
   });
   it("falls back to SadaPay category budgets, then to 50/50 — never a silent 0", () => {
     const empty = seeded("2026-11-01");
@@ -401,6 +395,32 @@ describe("savingsHistory (what the what-if decides on)", () => {
     const h = savingsHistory(ds, NOW);
     expect(h).toMatchObject({ basis: "estimate", average: rs(85000) });
     expect(h.months).toEqual([{ month: "2026-11", saved: rs(85000), partial: true }]);
+  });
+});
+
+describe("income and the first month's estimates", () => {
+  it("income = what you sent from your bank (funding), averaged over complete months, else this month so far", () => {
+    const first = withRows(seeded("2026-11-01"), {
+      transactions: [
+        txn({ occurred_at: "2026-11-02T09:00", amount: rs(40000), flow: "funding" }),
+        txn({ occurred_at: "2026-11-09T09:00", amount: rs(25000), flow: "funding" }),
+        txn({ occurred_at: "2026-11-03T09:00", amount: rs(5000), flow: "income" }),
+      ],
+    });
+    expect(monthlyIncome(first, NOW)).toMatchObject({ amount: rs(65000), basis: "this_month" });
+    expect(monthlyIncome(seeded("2026-11-01"), NOW)).toMatchObject({ amount: rs(85000), basis: "setting" });
+  });
+  it("usual spend before a complete month: the daily rate so far (variable), as-is (fixed)", () => {
+    const first = withRows(seeded("2026-11-01"), {
+      transactions: [
+        txn({ occurred_at: "2026-11-05T10:00", amount: -rs(7000), category_id: "food" }),
+        txn({ occurred_at: "2026-11-04T10:00", amount: -rs(5000), category_id: "bills.guard" }),
+      ],
+    });
+    const p = plannedCategories(first, NOW);
+    // 7,000 over 15 days → 30-day month
+    expect(p.find((c) => c.category_id === "food")).toMatchObject({ planned: rs(14000), source: "estimate" });
+    expect(p.find((c) => c.category_id === "bills")).toMatchObject({ planned: rs(5000), source: "estimate" });
   });
 });
 

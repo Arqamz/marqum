@@ -6,7 +6,7 @@ import type { AccountId, BalanceEntry, Goal, Loan, Recurring, Transaction } from
 import { carryId, isCf, OPENING_FROM_STATEMENT, OPENING_SET_BY_YOU } from "./carry.ts";
 import { numericSetting, trackingStart, trackingStartMonth } from "./dataset.ts";
 import { formatRs } from "./money.ts";
-import { addMonths, completeMonthsBefore, dayLabel, monthOf } from "./time.ts";
+import { addMonths, completeMonthsBefore, dayLabel, daysInMonth, monthOf } from "./time.ts";
 import type { Dataset, GoalStatus, LoanStatus, WalletPosition } from "./types.ts";
 
 /** Non-deleted transactions on or after tracking start. Everything before tracking start does not exist. */
@@ -93,6 +93,63 @@ export function firstDataMonth(ds: Dataset): string | null {
     if (first === null || m < first) first = m;
   }
   return first;
+}
+
+/** Money you sent yourself from your bank (Arqam · Meezan → a wallet) in `month`: flow "funding" inflows. */
+export function incomeIn(ds: Dataset, month: string): number {
+  let sum = 0;
+  for (const t of liveTxns(ds))
+    if (t.flow === "funding" && t.amount > 0 && monthOf(t.occurred_at) === month) sum += t.amount;
+  return sum;
+}
+
+/**
+ * Monthly income = what you sent from your bank account into the wallets. Average of the complete months that had
+ * any; else this month so far; else the `income_monthly` setting (a fresh install with nothing imported).
+ */
+export function monthlyIncome(
+  ds: Dataset,
+  now: string,
+): {
+  amount: number;
+  basis: "average" | "this_month" | "setting";
+  months: { month: string; amount: number }[];
+} {
+  const current = monthOf(now);
+  const months = averageMonths(ds, current)
+    .map((m) => ({ month: m, amount: incomeIn(ds, m) }))
+    .filter((m) => m.amount > 0);
+  if (months.length > 0)
+    return {
+      amount: Math.round(months.reduce((s, m) => s + m.amount, 0) / months.length),
+      basis: "average",
+      months,
+    };
+  const sofar = incomeIn(ds, current);
+  if (sofar > 0) return { amount: sofar, basis: "this_month", months: [{ month: current, amount: sofar }] };
+  return { amount: Math.round(numericSetting(ds, "income_monthly")), basis: "setting", months: [] };
+}
+
+/** Days tracked so far: tracking start → today inclusive (≥ 1). */
+export function daysTracked(ds: Dataset, now: string): number {
+  const start = Date.parse(`${trackingStart(ds)}T00:00Z`);
+  const today = Date.parse(`${now.slice(0, 10)}T00:00Z`);
+  return Math.max(1, Math.round((today - start) / 86_400_000) + 1);
+}
+
+/**
+ * A category's usual month before there's a complete month to average: variable spending at the daily rate since
+ * tracking started (total ÷ days × 30-ish days of this month); fixed spending as it stands this month.
+ */
+export function categoryRunRate(ds: Dataset, categoryId: string, now: string): number {
+  const current = monthOf(now);
+  const monthly = categoryMonthlySpend(ds, categoryId);
+  const cat = ds.categories.find((c) => c.id === categoryId);
+  if (cat?.nature === "fixed") return monthly.get(current) ?? 0;
+  let total = 0;
+  for (const [m, v] of monthly) if (m >= trackingStartMonth(ds) && m <= current) total += v;
+  const days = daysTracked(ds, now);
+  return Math.round((total / days) * daysInMonth(current));
 }
 
 export const averageWindow = (ds: Dataset): number => (numericSetting(ds, "avg_window") === 3 ? 3 : 6);

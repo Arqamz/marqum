@@ -220,18 +220,19 @@ describe("category cards & averages", () => {
     });
     expect(food(only)).toMatchObject({ baseline: null, vs_pace: null, share: 1 });
   });
-  it("monthPulse: total spend vs what income leaves, at today's pace", () => {
-    const only = withRows(seeded(), {
+  it("monthPulse: per day, and vs your usual month only once there is one", () => {
+    const only = withRows(seeded("2026-11-01"), {
       transactions: [txn({ occurred_at: "2026-11-05T10:00", amount: -rsOf(30000), category_id: "food" })],
     });
-    const p = monthPulse(only, "2026-11", NOW);
-    expect(p).toMatchObject({
+    expect(monthPulse(only, "2026-11", NOW)).toMatchObject({
       spent: rsOf(30000),
-      allowance: rsOf(85000),
-      pace: rsOf(42500),
+      per_day: rsOf(2000),
+      average: null,
+      vs_pace: null,
       projected: rsOf(60000),
     });
-    expect(p.vs_pace).toBeCloseTo(30000 / 42500 - 1, 6);
+    // food averaged 25k over six complete months; 30k by the 15th vs 12.5k usual → +140%
+    expect(monthPulse(ds, "2026-11", NOW)).toMatchObject({ average: 25000, pace: 12500 });
   });
   it("reimbursements offset the linked expense's category in the reimbursement's month", () => {
     const e = txn({ id: "e1", occurred_at: "2026-10-20T20:00", amount: -10000, category_id: "food.friends" });
