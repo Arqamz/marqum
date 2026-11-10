@@ -39,11 +39,18 @@ object SelfUpdater {
 
     data class Release(val version: String, val apkUrl: String)
 
+    /** version whose install was committed in this process (the process dies when it lands) */
+    @Volatile private var pending: String? = null
+
     fun schedule(context: Context) {
         val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
-        val periodic = PeriodicWorkRequestBuilder<UpdateWorker>(6, TimeUnit.HOURS).setConstraints(constraints).build()
+        // the launch check (checkNow) covers "now"; the periodic one starts 6 h later
+        val periodic = PeriodicWorkRequestBuilder<UpdateWorker>(6, TimeUnit.HOURS)
+            .setConstraints(constraints)
+            .setInitialDelay(6, TimeUnit.HOURS)
+            .build()
         WorkManager.getInstance(context)
-            .enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP, periodic)
+            .enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.UPDATE, periodic)
     }
 
     fun checkNow(context: Context) {
@@ -93,9 +100,11 @@ object SelfUpdater {
     }
 
     /** Checks, downloads and installs when there is something newer. Returns what it did. Call off the main thread. */
+    @Synchronized
     fun run(context: Context): String {
         val current = installedVersion(context)
         val release = latest() ?: return "no release"
+        if (pending == release.version) return "already installing ${release.version}"
         if (!isNewer(release.version, current)) return "up to date ($current)"
         val dir = File(context.cacheDir, "updates").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }
@@ -106,6 +115,7 @@ object SelfUpdater {
             return "rejected ${release.version}: different signing key"
         }
         install(context, apk)
+        pending = release.version
         return "installing ${release.version}"
     }
 
