@@ -109,7 +109,30 @@ export interface CategoryCard {
   over_average: boolean;
   /** same-day-of-month pace: average × (day / daysInMonth) */
   pace: number | null;
+  /** budget ?? average: what a normal month of this category costs; null when there's neither */
+  baseline: number | null;
+  baseline_source: "budget" | "average" | null;
+  /** spent vs the baseline's same-day pace, as a fraction (+0.2 = 20% ahead); null without a baseline or pace */
+  vs_pace: number | null;
+  /** share of this month's spend across all categories, 0..1 */
+  share: number;
+  /** month in progress: spend so far extended to the whole month at the same daily rate; else = spent */
+  projected: number;
   children: { category: Category; spent: number; average: number | null }[];
+}
+
+/** The month at a glance: total spend so far vs what income leaves for spending, at the same day of month. */
+export interface MonthPulse {
+  spent: number;
+  /** income − goal contributions − loan installments (what's there to spend in a month); null without income */
+  allowance: number | null;
+  /** allowance × day fraction */
+  pace: number | null;
+  /** spent vs pace as a fraction; null without pace */
+  vs_pace: number | null;
+  /** spend so far extended to month end */
+  projected: number;
+  day_fraction: number;
 }
 
 export interface SeriesPoint {
@@ -239,6 +262,15 @@ export interface ProjectionMonth {
   debt: number;
 }
 
+/** What you actually kept each month across both wallets (in − out, ignoring transfers between them and loans). */
+export interface SavingsHistory {
+  months: { month: string; saved: number; partial: boolean }[];
+  /** mean of `months`; null when there's nothing to go on */
+  average: number | null;
+  /** history = complete months; estimate = this month only (income − spend so far at today's pace) */
+  basis: "history" | "estimate" | "none";
+}
+
 export interface WhatIfResult {
   verdict: "now" | "easy" | "stretch" | "no";
   headline: string; // specific, e.g. "Affordable in 3 months at Rs 14,200/month"
@@ -258,6 +290,10 @@ export interface WhatIfResult {
   risk_months: string[];
   /** solid = works in the bad case; likely = in the expected case; risky = only in the good case; no = never */
   confidence: "solid" | "likely" | "risky" | "no";
+  /** the savings the verdict is based on */
+  savings: SavingsHistory;
+  /** monthly amount free for this purchase: average saved − goal contributions − loan installments (± levers) */
+  surplus: number;
 }
 
 export interface SplitSuggestion {

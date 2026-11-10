@@ -1,12 +1,15 @@
 import type { AccountId, Category, Goal } from "@marqum/schema";
+import { monthPulse } from "./analytics.ts";
 import { numericSetting, setting, trackingStartMonth } from "./dataset.ts";
 import {
+  averageMonths,
   categoryAverage,
   categoryMonthlySpend,
   firstDataMonth,
   goalEta,
   goalSaved,
   goalStatusOf,
+  liveTxns,
   loanStatuses,
   monthlyEquivalent,
   nextContributionMonth,
@@ -28,6 +31,7 @@ import type {
   LoanStatus,
   PlannedCategory,
   ProjectionMonth,
+  SavingsHistory,
   SplitSuggestion,
   WhatIfInput,
   WhatIfResult,
@@ -255,6 +259,49 @@ export function allocation(ds: Dataset, now: string): Allocation {
   return { income, sadapay: suggested.sadapay, nayapay: suggested.nayapay, source: "suggested", suggested };
 }
 
+// ───────────────────────── savings history ─────────────────────────
+
+/** Flows that move money in or out of your hands (not between your wallets, not borrowing or repaying). */
+const KEPT_FLOWS = new Set(["income", "funding", "spend", "fee", "reimbursement"]);
+
+/**
+ * Combined SadaPay + NayaPay savings per complete month in the averaging window: Σ inflows − Σ outflows,
+ * ignoring internal transfers, carry rows and loans. Without a complete month, an estimate for this month:
+ * income − spend so far extended to month end.
+ */
+export function savingsHistory(ds: Dataset, now: string): SavingsHistory {
+  const current = monthOf(now);
+  const months = averageMonths(ds, current);
+  if (months.length > 0) {
+    const want = new Set(months);
+    const saved = new Map(months.map((m) => [m, 0]));
+    const paid = new Set<string>();
+    for (const t of liveTxns(ds)) {
+      const m = monthOf(t.occurred_at);
+      if (!want.has(m) || !KEPT_FLOWS.has(t.flow)) continue;
+      saved.set(m, (saved.get(m) ?? 0) + t.amount);
+      if (t.flow === "income" || t.flow === "funding") paid.add(m);
+    }
+    // a month with no pay recorded (statement missing the salary) counts your set income
+    const income = Math.round(numericSetting(ds, "income_monthly"));
+    const list = months.map((m) => ({
+      month: m,
+      saved: (saved.get(m) ?? 0) + (paid.has(m) ? 0 : income),
+      partial: false,
+    }));
+    return {
+      months: list,
+      average: Math.round(list.reduce((s, x) => s + x.saved, 0) / list.length),
+      basis: "history",
+    };
+  }
+  const income = Math.round(numericSetting(ds, "income_monthly"));
+  if (income <= 0) return { months: [], average: null, basis: "none" };
+  const pulse = monthPulse(ds, current, now);
+  const saved = income - pulse.projected;
+  return { months: [{ month: current, saved, partial: true }], average: saved, basis: "estimate" };
+}
+
 // ───────────────────────── forecast ─────────────────────────
 
 const DEFAULT_ASSUMPTIONS: ForecastAssumptions = {
@@ -358,6 +405,8 @@ interface ProjectionExtra {
   start_adjust?: number;
   one_offs?: { month: string; amount: number }[];
   months?: number;
+  /** replaces the planned variable spend (e.g. calibrated from what you actually saved) */
+  variable_expected?: number;
 }
 
 function existingLoanSims(ds: Dataset, now: string): SimLoan[] {
@@ -383,7 +432,9 @@ function projectWith(ds: Dataset, now: string, a: ForecastAssumptions, extra: Pr
   const fixedIn = (month: string) =>
     monthlyFixed +
     p.recurring.filter((r) => r.yearly_in === Number(month.slice(5, 7))).reduce((s, r) => s + r.full, 0);
-  const variableExpected = Math.round(sum(p.variableCats) * (1 + a.spend_adjust_pct / 100));
+  const variableExpected = Math.round(
+    (extra.variable_expected ?? sum(p.variableCats)) * (1 + a.spend_adjust_pct / 100),
+  );
   const spread = Math.round(variableSpread(ds, now, variableExpected, a.uncertainty));
   const variable = {
     expected: variableExpected,
@@ -530,7 +581,19 @@ export function whatIf(ds: Dataset, input: WhatIfInput, now: string): WhatIfResu
   const assumptions = { ...a, category_adjust: levers };
   const model = budgetModel(ds, now, levers);
   const P = Math.max(0, Math.round(input.price));
-  const S = model.surplus;
+  // Calibrate to what you actually save: the spending that, with your income and fixed charges, leaves your
+  // average saving; levers (cut Food by 20%…) still move it. Without savings data, fall back to the plan.
+  const savings = savingsHistory(ds, now);
+  let calibrated: number | undefined;
+  let S = model.surplus;
+  if (savings.average !== null) {
+    const parts = modelParts(ds, now);
+    const fixedMonthly = sum(parts.recurring) + sum(parts.fixedUncovered);
+    const leverDelta = model.variable - sum(parts.variableCats);
+    calibrated = Math.max(0, parts.income - fixedMonthly - savings.average + leverDelta);
+    S = parts.income - fixedMonthly - calibrated - sum(parts.installments) - sum(parts.goals);
+  }
+  const extraVar = calibrated === undefined ? {} : { variable_expected: calibrated };
   const F = model.free_savings;
   const notAffordable = `Not affordable — your monthly surplus is ${formatRs(S)}`;
   const empty = { best: null, expected: null, worst: null };
@@ -548,13 +611,15 @@ export function whatIf(ds: Dataset, input: WhatIfInput, now: string): WhatIfResu
         debt_free_month: null,
         goal_delays: goalDelays(ds, now, 0, 0),
         waterfall: waterfall(model, "Saving for this", 0),
-        projection: projectWith(ds, now, assumptions, { start_adjust: -P }),
+        projection: projectWith(ds, now, assumptions, { ...extraVar, start_adjust: -P }),
         ready_month_range: { best: current, expected: current, worst: current },
         risk_months: [],
         confidence: "solid",
+        savings,
+        surplus: S,
       };
     }
-    const base = projectWith(ds, now, assumptions);
+    const base = projectWith(ds, now, assumptions, extraVar);
     const reach = (key: "expected" | "low" | "high") =>
       base.find((m) => m.month >= earliest && m.savings[key] >= P)?.month ?? null;
     const range = { best: reach("high"), expected: reach("expected"), worst: reach("low") };
@@ -600,11 +665,16 @@ export function whatIf(ds: Dataset, input: WhatIfInput, now: string): WhatIfResu
       goal_delays: goalDelays(ds, now, 0, m ?? 0),
       waterfall: waterfall(model, "Saving for this", plan),
       projection: range.expected
-        ? projectWith(ds, now, assumptions, { one_offs: [{ month: range.expected, amount: -P }] })
+        ? projectWith(ds, now, assumptions, {
+            ...extraVar,
+            one_offs: [{ month: range.expected, amount: -P }],
+          })
         : base,
       ready_month_range: range,
       risk_months: [],
       confidence,
+      savings,
+      surplus: S,
     };
   }
 
@@ -637,14 +707,14 @@ export function whatIf(ds: Dataset, input: WhatIfInput, now: string): WhatIfResu
   const lastMonth = [...schedule.keys()].sort().at(-1) ?? start;
   const months = Math.min(120, Math.max(a.horizon_months, monthsDiff(current, lastMonth)));
   const newLoan: SimLoan = { left: P, due: (m) => schedule.get(m) ?? 0 };
-  const projection = projectWith(ds, now, assumptions, { loans: [newLoan], months });
+  const projection = projectWith(ds, now, assumptions, { ...extraVar, loans: [newLoan], months });
 
   // debt-free: every loan at its own schedule, simulated well past the horizon
   const longRun = projectWith(
     ds,
     now,
     { ...assumptions, one_offs: [] },
-    { loans: [{ ...newLoan }], months: 600 },
+    { ...extraVar, loans: [{ ...newLoan }], months: 600 },
   );
   const debt_free_month = longRun.find((m) => m.debt === 0)?.month ?? null;
 
@@ -689,5 +759,7 @@ export function whatIf(ds: Dataset, input: WhatIfInput, now: string): WhatIfResu
     ready_month_range: empty,
     risk_months,
     confidence,
+    savings,
+    surplus: S,
   };
 }

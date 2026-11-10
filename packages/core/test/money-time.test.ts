@@ -53,3 +53,20 @@ describe("time", () => {
     expect(karachiNow()).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
   });
 });
+
+describe("formatRs compact", () => {
+  it.each([
+    [99900, "Rs 999"],
+    [100000, "Rs 1k"],
+    [1234500, "Rs 12.3k"],
+    [-1234500, "−Rs 12.3k"],
+    [12345600, "Rs 123k"],
+    [99950000, "Rs 1M"],
+    [123456700, "Rs 1.2M"],
+  ])("%d → %s", (p, s) => {
+    expect(formatRs(p, { compact: true })).toBe(s);
+  });
+  it("keeps the sign option", () => {
+    expect(formatRs(250000, { compact: true, sign: true })).toBe("+Rs 2.5k");
+  });
+});

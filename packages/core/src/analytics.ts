@@ -1,7 +1,7 @@
 import type { AccountId, Category, Recurring, Transaction } from "@marqum/schema";
 import { isBf, isCarry, isCf } from "./carry.ts";
 import { counterpartyKey, normalizeKey } from "./classify.ts";
-import { isClosed, trackingStartMonth } from "./dataset.ts";
+import { isClosed, numericSetting, trackingStartMonth } from "./dataset.ts";
 import {
   balanceAt,
   categoryAverage,
@@ -13,6 +13,7 @@ import {
   monthlySpendOf,
   spendEvents,
   subtreeIds,
+  unachievedGoals,
   walletPositions,
 } from "./ledger.ts";
 import {
@@ -34,6 +35,7 @@ import type {
   Dataset,
   ExpectedCharge,
   MonthLedger,
+  MonthPulse,
   NetPosition,
   RecurringCandidate,
   SeriesPoint,
@@ -96,7 +98,7 @@ export function categoryCards(ds: Dataset, month: string, now: string): Category
   const current = monthOf(now);
   const dayFrac = month === current ? Number(now.slice(8, 10)) / daysInMonth(month) : month < current ? 1 : 0;
   const cats = ds.categories.filter((c) => !c.deleted);
-  const cards: CategoryCard[] = [];
+  const cards: Omit<CategoryCard, "share">[] = [];
   for (const cat of cats.filter((c) => c.parent_id === null)) {
     const monthly = categoryMonthlySpend(ds, cat.id);
     const spent = monthly.get(month) ?? 0;
@@ -107,6 +109,8 @@ export function categoryCards(ds: Dataset, month: string, now: string): Category
       spent: p.spent,
       average: p.average,
     }));
+    const baseline = cat.budget ?? average;
+    const basePace = baseline === null ? null : Math.round(baseline * dayFrac);
     cards.push({
       category: cat,
       spent,
@@ -114,10 +118,39 @@ export function categoryCards(ds: Dataset, month: string, now: string): Category
       months_in_average,
       over_average: average !== null && spent > average,
       pace: average === null ? null : Math.round(average * dayFrac),
+      baseline,
+      baseline_source: cat.budget != null ? "budget" : average !== null ? "average" : null,
+      vs_pace: basePace ? (spent - basePace) / basePace : null,
+      projected: dayFrac > 0 && dayFrac < 1 ? Math.round(spent / dayFrac) : spent,
       children,
     });
   }
-  return cards.sort((a, b) => b.spent - a.spent || a.category.sort - b.category.sort);
+  const total = cards.reduce((s, c) => s + c.spent, 0);
+  return cards
+    .map((c) => ({ ...c, share: total > 0 ? c.spent / total : 0 }))
+    .sort((a, b) => b.spent - a.spent || a.category.sort - b.category.sort);
+}
+
+/** Total spend this month vs what income leaves to spend (after goals and loan installments), at today's pace. */
+export function monthPulse(ds: Dataset, month: string, now: string): MonthPulse {
+  const current = monthOf(now);
+  const dayFrac = month === current ? Number(now.slice(8, 10)) / daysInMonth(month) : month < current ? 1 : 0;
+  const spent = categoryCards(ds, month, now).reduce((s, c) => s + c.spent, 0);
+  const income = Math.round(numericSetting(ds, "income_monthly"));
+  const goals = unachievedGoals(ds).reduce((s, g) => s + g.monthly, 0);
+  const installments = loanStatuses(ds, now)
+    .filter((l) => l.outstanding > 0)
+    .reduce((s, l) => s + Math.min(l.loan.installment, l.outstanding), 0);
+  const allowance = income > 0 ? Math.max(0, income - goals - installments) : null;
+  const pace = allowance === null ? null : Math.round(allowance * dayFrac);
+  return {
+    spent,
+    allowance,
+    pace,
+    vs_pace: pace ? (spent - pace) / pace : null,
+    projected: dayFrac > 0 && dayFrac < 1 ? Math.round(spent / dayFrac) : spent,
+    day_fraction: dayFrac,
+  };
 }
 
 /**

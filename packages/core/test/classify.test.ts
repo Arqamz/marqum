@@ -49,7 +49,7 @@ describe("classify", () => {
       category_id: "car.petrol",
       flow: "spend",
     });
-    expect(out("Card payment PANDAPRO", -50000).category_id).toBe("subscriptions.foodpanda");
+    expect(out("Card payment PANDAPRO", -50000).category_id).toBe("subscriptions.enjoyment");
     expect(out("POS Purchase FOODPANDA*123", -50000).category_id).toBe("food");
   });
   it("matches the reason too, case-insensitively", () => {
@@ -79,10 +79,10 @@ describe("classify", () => {
     expect(
       out("Spotify*p48f8f2310 Regeringsgatan 19 Spotify.com 111 53 Ab Swe", -79397, "sadapay"),
     ).toMatchObject({
-      category_id: "subscriptions",
+      category_id: "subscriptions.enjoyment",
       counterparty_name: "Spotify",
     });
-    expect(out("Food Panda Pro subscription", -50000, "sadapay").category_id).toBe("subscriptions.foodpanda");
+    expect(out("Food Panda Pro subscription", -50000, "sadapay").category_id).toBe("subscriptions.enjoyment");
   });
   it("own-account / top-up inflows are funding", () => {
     expect(out("Own account transfer", 100000).flow).toBe("funding");

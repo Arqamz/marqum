@@ -362,7 +362,7 @@ describe("reference data commands", () => {
         recurring_id: "r1",
         name: "iCloud",
         account_id: "sadapay",
-        category_id: "subscriptions.icloud",
+        category_id: "subscriptions.essentials",
         counterparty_id: null,
         amount: -90000,
         day_of_month: 3,

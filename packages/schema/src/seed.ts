@@ -70,10 +70,10 @@ export const SEED_CATEGORIES: SeedCategory[] = [
   sub(bills, "phone", "Phone"),
   sub(bills, "pocketmoney", "Brother's pocket money"),
   subs,
-  sub(subs, "icloud", "iCloud"),
-  sub(subs, "vps", "VPS"),
-  sub(subs, "domain", "Domain"),
-  sub(subs, "foodpanda", "Foodpanda Pro"),
+  // Kinds of subscription, not services: the services themselves are the subscriptions you add (Plan → Fixed).
+  sub(subs, "enjoyment", "Enjoyment"),
+  sub(subs, "professional", "Professional"),
+  sub(subs, "essentials", "Essentials"),
   charity,
   misc,
   health,
@@ -106,22 +106,22 @@ export const SEED_RULES: { pattern: string; category_id: string | null; flow: st
   },
   {
     pattern: "\\b(icloud|apple\\.com/bill|apple services)\\b",
-    category_id: "subscriptions.icloud",
+    category_id: "subscriptions.essentials",
     flow: null,
   },
   {
     pattern: "\\b(hetzner|digitalocean|vultr|linode|contabo|hostinger vps|vps)\\b",
-    category_id: "subscriptions.vps",
+    category_id: "subscriptions.professional",
     flow: null,
   },
   {
     pattern: "\\b(namecheap|godaddy|porkbun|cloudflare|domain)\\b",
-    category_id: "subscriptions.domain",
+    category_id: "subscriptions.professional",
     flow: null,
   },
   {
     pattern: "\\b(pandapro|panda ?pro|food ?panda pro)\\b",
-    category_id: "subscriptions.foodpanda",
+    category_id: "subscriptions.enjoyment",
     flow: null,
   },
   {
@@ -140,5 +140,9 @@ export const SEED_RULES: { pattern: string; category_id: string | null; flow: st
   { pattern: "\\b(service charges?|fee|tax deducted|withholding)\\b", category_id: "fees", flow: "fee" },
   // Meezan alone isn't funding (anyone can bank there): funding = a transfer from *you* (see classify.inferFlow)
   { pattern: "\\bown[- ]account transfer\\b", category_id: null, flow: "funding" },
-  { pattern: "\\b(spotify|netflix|youtube premium)\\b", category_id: "subscriptions", flow: null },
+  {
+    pattern: "\\b(spotify|netflix|youtube premium|disney\\+?|prime video|apple music)\\b",
+    category_id: "subscriptions.enjoyment",
+    flow: null,
+  },
 ];

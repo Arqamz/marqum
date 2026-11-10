@@ -35,7 +35,7 @@ describe("yearly fixed charges", () => {
   const domain = recurring("Domain", rs(12000), {
     cadence: "yearly",
     month_of_year: 3,
-    category_id: "subscriptions.domain",
+    category_id: "subscriptions.professional",
     kind: "subscription",
   });
   const ds = withRows(seeded("2026-11-01"), { recurring: [domain, recurring("iCloud", rs(900))] });
@@ -104,7 +104,7 @@ describe("expectedCharges", () => {
         }),
         recurring("iCloud", rs(900), {
           id: "r-icloud",
-          category_id: "subscriptions.icloud",
+          category_id: "subscriptions.essentials",
           day_of_month: 31,
           kind: "subscription",
         }),

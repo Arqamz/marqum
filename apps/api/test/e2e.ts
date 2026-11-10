@@ -569,7 +569,7 @@ await push([importCmd(await readCsvStatement(NAYA_OCT), "m-10-2026.csv")]);
         recurring_id: "e2e-rec-1",
         name: "Test VPS",
         account_id: "sadapay",
-        category_id: "subscriptions.vps",
+        category_id: "subscriptions.professional",
         counterparty_id: null,
         amount: 150000,
         day_of_month: 5,

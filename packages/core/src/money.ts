@@ -8,10 +8,18 @@ const group = (n: string): string => n.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
  * "Rs 1,234", "−Rs 500", "+Rs 33,300" (with `sign`), "Rs 1,234.50" (with `decimals`).
  * Without `decimals`, rounds half away from zero to whole rupees.
  */
-export function formatRs(paisa: number, opts: { sign?: boolean; decimals?: boolean } = {}): string {
+export function formatRs(
+  paisa: number,
+  opts: { sign?: boolean; decimals?: boolean; compact?: boolean } = {},
+): string {
   const abs = Math.abs(paisa);
   let body: string;
-  if (opts.decimals) {
+  const rs = abs / 100;
+  if (opts.compact && Math.round(rs) >= 1000) {
+    // Rs 12.3k / Rs 123k / Rs 1.2M — for tight spots (cards, badges)
+    const [v, unit] = rs >= 999_500 ? [rs / 1_000_000, "M"] : [rs / 1000, "k"];
+    body = `${v >= 100 ? Math.round(v) : Number(v.toFixed(1))}${unit}`;
+  } else if (opts.decimals) {
     const rupees = Math.floor(abs / 100);
     const cents = String(abs % 100).padStart(2, "0");
     body = `${group(String(rupees))}.${cents}`;
