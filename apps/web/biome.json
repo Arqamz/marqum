@@ -5,6 +5,8 @@
   "files": {
     "includes": [
       "**",
+      "!AGENTS.md",
+      "!GEMINI.md",
       "!src/astryx-themes.ts",
       "!src/themes/*/*.css",
       "!src/themes/*/*.js",
