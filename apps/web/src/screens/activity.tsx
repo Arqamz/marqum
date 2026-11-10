@@ -275,6 +275,7 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
           txns={rows}
           l={l}
           now={now}
+          links={ds.transactions}
           onOpen={(t) => setOpen(t.id)}
           isClosedMonth={(m) => isClosed(ds, m)}
         />

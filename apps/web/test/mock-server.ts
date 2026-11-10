@@ -126,7 +126,7 @@ export class MockServer {
     if (path === "/api/auth/devices") {
       return {
         status: 200,
-        body: [{ id: "dev-test", name: "Test phone", last_seen_at: this.now, current: true }],
+        body: [{ id: "dev-test", name: "Test phone", last_seen: this.now, current: true }],
       };
     }
     if (path === "/api/auth/step-up/passcode") {

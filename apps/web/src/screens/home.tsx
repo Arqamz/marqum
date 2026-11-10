@@ -4,7 +4,6 @@ import { Card } from "@astryxdesign/core/Card";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Grid } from "@astryxdesign/core/Grid";
 import { HStack } from "@astryxdesign/core/HStack";
-import { ProgressBar } from "@astryxdesign/core/ProgressBar";
 import { StackItem } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
@@ -28,6 +27,7 @@ import { ArrowDownLeft, ArrowUpRight, Plus } from "lucide-react";
 import { useMemo } from "react";
 import { WalletLogo } from "../components/brand-logo.tsx";
 import { CategoryTile } from "../components/category-icon.tsx";
+import { CloseBanner } from "../components/close-banner.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { HeroAmount, Money, TweenMoney } from "../components/money.tsx";
 import { openQuickAdd } from "../components/quick-add.tsx";
@@ -77,16 +77,16 @@ function HomeSkeleton() {
 }
 
 /** ▲ 12% / ▼ 8% against a pace; red when ahead of it (spending faster), green when behind. */
-export function Ticker({ value, label }: { value: number | null; label: string }) {
+export function Ticker({ value, label, suffix }: { value: number | null; label: string; suffix?: string }) {
   if (value === null || !Number.isFinite(value)) return null;
   const pct = Math.round(value * 100);
   if (Math.abs(pct) < 3)
-    return <Badge variant="neutral" label="● on pace" aria-label={`On pace vs ${label}`} />;
+    return <Badge variant="neutral" label="● usual" aria-label={`About the same as ${label}`} />;
   const up = pct > 0;
   return (
     <Badge
       variant={up ? "error" : "success"}
-      label={`${up ? "▲" : "▼"} ${Math.abs(pct)}%`}
+      label={`${up ? "▲" : "▼"} ${Math.abs(pct)}%${suffix ? ` ${suffix}` : ""}`}
       aria-label={`${Math.abs(pct)}% ${up ? "above" : "below"} ${label}`}
       data-testid="ticker"
     />
@@ -116,6 +116,7 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
 
   return (
     <VStack gap={6}>
+      <CloseBanner ds={ds} now={now} />
       <VStack as="section" gap={2} hAlign="center" paddingBlockStart={4} data-testid="hero">
         <Text type="label" color="secondary">
           Net position
@@ -126,9 +127,9 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
         />
         <HStack gap={2} hAlign="center" wrap="wrap" vAlign="center">
           <Text type="supporting" hasTabularNumbers>
-            {formatRs(pulse.spent)} spent in {monthLabel(month).split(" ")[0]}
+            {formatRs(pulse.spent)} spent · {formatRs(pulse.per_day)}/day
           </Text>
-          <Ticker value={pulse.vs_pace} label="your monthly plan" />
+          <Ticker value={pulse.vs_pace} label="your usual month by this day" suffix="vs usual" />
         </HStack>
         {debtLine ? (
           <Text type="supporting" justify="center" textWrap="balance" data-testid="debt-line">
@@ -174,16 +175,13 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
       ) : null}
 
       <VStack as="section" gap={3} aria-label={`Spending in ${monthLabel(month)}`}>
-        <HStack justify="between" vAlign="center">
-          <Text type="label">{monthLabel(month)}</Text>
-          {cards.some((c) => c.vs_pace !== null) ? null : (
-            <Text type="supporting">▲▼ from Dec, vs your average</Text>
-          )}
-        </HStack>
+        <Text type="label">{monthLabel(month)}</Text>
         <Grid columns={2} gap={3}>
-          {cards.map((c) => (
-            <CategoryTileCard key={c.category.id} c={c} month={month} />
-          ))}
+          {cards
+            .filter((c) => c.spent > 0)
+            .map((c) => (
+              <CategoryTileCard key={c.category.id} c={c} month={month} />
+            ))}
         </Grid>
       </VStack>
 
@@ -207,7 +205,12 @@ function WalletCard({ ds, w, month, now }: { ds: Dataset; w: WalletPosition; mon
   const below = w.floor !== null && w.balance < w.floor;
   const id = w.account_id;
   return (
-    <Link to="/wallet/$id" params={{ id }} data-testid={`wallet-${id}`} className="block rounded-container">
+    <Link
+      to="/wallet/$id"
+      params={{ id }}
+      data-testid={`wallet-${id}`}
+      className="block min-w-0 rounded-container"
+    >
       <Card variant={id} height="100%" padding={4}>
         <VStack gap={3} height="100%">
           <HStack gap={2} vAlign="center">
@@ -247,17 +250,34 @@ function WalletCard({ ds, w, month, now }: { ds: Dataset; w: WalletPosition; mon
   );
 }
 
+/**
+ * One glance: the amount, a ▲/▼ against the usual month at this day, and a bar of spend vs usual whose colour
+ * carries the state (red over, green under, grey before there's a usual).
+ */
 function CategoryTileCard({ c, month }: { c: CategoryCard; month: string }) {
-  const share = Math.round(c.share * 100);
+  const state =
+    c.vs_pace === null ? "none" : c.vs_pace > 0.03 ? "over" : c.vs_pace < -0.03 ? "under" : "even";
+  const usual = c.baseline ?? (c.projected > c.spent ? c.projected : null);
+  const usualLabel =
+    c.baseline !== null
+      ? `${c.baseline_source === "budget" ? "budget" : "avg"} ${formatRs(c.baseline, { compact: true })}`
+      : usual !== null
+        ? `~${formatRs(usual, { compact: true })} by month end`
+        : null;
   return (
     <Link
       to="/category/$id"
       params={{ id: c.category.id }}
       search={{ month }}
       data-testid="category-card"
-      className="block rounded-container transition-transform active:scale-[0.98]"
+      data-state={state}
+      className="block min-w-0 rounded-container transition-transform active:scale-[0.98]"
     >
-      <Card height="100%" padding={3}>
+      <Card
+        height="100%"
+        padding={3}
+        variant={state === "over" ? "red" : state === "under" ? "green" : "default"}
+      >
         <VStack gap={2}>
           <HStack gap={2} vAlign="center">
             <CategoryTile id={c.category.id} name={c.category.icon} size="sm" />
@@ -266,24 +286,32 @@ function CategoryTileCard({ c, month }: { c: CategoryCard; month: string }) {
                 {c.category.name}
               </Text>
             </StackItem>
-          </HStack>
-          <HStack gap={2} vAlign="center" justify="between" wrap="wrap">
-            <Money value={c.spent} className="text-lg font-semibold" />
             <Ticker value={c.vs_pace} label={c.baseline_source === "budget" ? "budget" : "average"} />
           </HStack>
-          <ProgressBar
-            label={`${share}% of this month's spending`}
-            isLabelHidden
-            value={share}
-            max={100}
-            variant="accent"
-          />
-          <Text type="supporting" size="xsm" hasTabularNumbers>
-            {share}% of spend
-            {c.baseline !== null
-              ? ` · ${c.baseline_source === "budget" ? "budget" : "avg"} ${formatRs(c.baseline, { compact: true })}`
-              : ""}
-          </Text>
+          <Money value={c.spent} className="text-xl font-semibold" />
+          {usual !== null ? (
+            <span
+              className="block h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-background-muted)]"
+              aria-hidden
+            >
+              <span
+                className={cn(
+                  "block h-full rounded-full",
+                  state === "over"
+                    ? "bg-error"
+                    : state === "under"
+                      ? "bg-success"
+                      : "bg-[var(--color-text-secondary)]",
+                )}
+                style={{ width: `${Math.round((Math.min(c.spent, usual) / usual) * 100)}%` }}
+              />
+            </span>
+          ) : null}
+          {usualLabel ? (
+            <Text type="supporting" size="xsm" hasTabularNumbers>
+              {usualLabel}
+            </Text>
+          ) : null}
         </VStack>
       </Card>
     </Link>

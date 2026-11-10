@@ -11,9 +11,9 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import {
-  allocation,
   budgetModel,
   type Dataset,
+  dayLabel,
   detectRecurring,
   expectedCharges,
   formatRs,
@@ -21,24 +21,27 @@ import {
   karachiNow,
   loanStatus,
   monthLabel,
+  monthlyIncome,
   monthOf,
   parseRs,
+  plannedCategories,
   type RecurringCandidate,
-  setting,
+  suggestedSplit,
 } from "@marqum/core";
 import type { AccountId, Category, Goal, Loan, Recurring } from "@marqum/schema";
 import { ChevronRight, Plus } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 import { CategoryIcon } from "../components/category-icon.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { Money } from "../components/money.tsx";
 import { RecurringForm } from "../components/recurring-form.tsx";
 import { Screen } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
-import { Segmented, Skeleton, Slider } from "../components/ui/controls.tsx";
+import { Segmented, Skeleton } from "../components/ui/controls.tsx";
 import { Field, Input, MoneyInput } from "../components/ui/input.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
 import { enqueue, newId } from "../lib/commands.ts";
+import { opt } from "../lib/opt.ts";
 import {
   cadenceLabel,
   KIND_LABEL,
@@ -90,7 +93,13 @@ type Edit =
   | { kind: "goal"; goal?: Goal }
   | { kind: "move"; goal: Goal }
   | { kind: "fixed"; recurring?: Recurring; candidate?: RecurringCandidate }
-  | { kind: "budget"; category: Category; average: number | null };
+  | { kind: "budget"; category: Category; basis: Basis | null };
+
+/** What a category would plan without a budget: its average, or (no complete month yet) the daily-rate estimate. */
+type Basis = { amount: number; source: "average" | "estimate" };
+
+const basisText = (b: Basis) =>
+  b.source === "average" ? `avg ${formatRs(b.amount)}` : `~${formatRs(b.amount)}/mo at your daily rate`;
 
 const WALLET: Record<AccountId, string> = { sadapay: "SadaPay", nayapay: "NayaPay" };
 
@@ -116,6 +125,14 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
     .filter((c) => c.parent_id === null && (!c.hidden || c.budget))
     .sort((a, b) => a.sort - b.sort);
   const planned = new Map(model.categories.map((c) => [c.category_id, c]));
+  const baseline = useMemo(() => {
+    const unbudgeted = { ...ds, categories: ds.categories.map((c) => ({ ...c, budget: null })) };
+    const out = new Map<string, Basis>();
+    for (const c of plannedCategories(unbudgeted, now))
+      if ((c.source === "average" || c.source === "estimate") && c.planned > 0)
+        out.set(c.category_id, { amount: c.planned, source: c.source });
+    return out;
+  }, [ds, now]);
   const kinds = (Object.keys(KIND_LABEL) as RecurringKind[]).filter((k) => fixed.some((r) => r.kind === k));
 
   return (
@@ -127,12 +144,12 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
             : `${formatRs(-model.surplus)} a month short`}
         </Heading>
         <Text color="secondary" hasTabularNumbers>
-          {formatRs(model.income)} in · {formatRs(model.committed)} fixed · {formatRs(model.variable)} usual ·{" "}
-          {formatRs(model.goal_contributions)} goals
+          {formatRs(model.income)} in · {formatRs(model.committed)} fixed · {formatRs(model.variable)}{" "}
+          spending · {formatRs(model.goal_contributions)} goals
         </Text>
       </VStack>
 
-      <MoneySection ds={ds} now={now} onEditIncome={() => setEdit({ kind: "income" })} />
+      <MoneySection ds={ds} now={now} onIncome={() => setEdit({ kind: "income" })} />
 
       <Block
         title="Fixed charges"
@@ -217,18 +234,14 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
           <List edge="outset" hasDividers data-testid="budgets">
             {tops.map((c) => {
               const pc = planned.get(c.id);
-              const avg = pc?.source === "average" && pc.planned > 0 ? pc.planned : null;
+              const basis = baseline.get(c.id) ?? null;
               return (
                 <ListItem
                   key={c.id}
                   startContent={<CategoryIcon name={c.icon} className="shrink-0 text-fg-muted" />}
                   label={c.name}
                   description={
-                    pc?.source === "recurring"
-                      ? "Fixed charges"
-                      : avg !== null
-                        ? `avg ${formatRs(avg)}`
-                        : "No history"
+                    pc?.source === "recurring" ? "Fixed charges" : basis ? basisText(basis) : "No history"
                   }
                   endContent={
                     <HStack gap={2} vAlign="center">
@@ -240,7 +253,7 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
                       <ChevronRight className="shrink-0 text-fg-subtle" aria-hidden />
                     </HStack>
                   }
-                  onClick={() => setEdit({ kind: "budget", category: c, average: avg })}
+                  onClick={() => setEdit({ kind: "budget", category: c, basis })}
                 />
               );
             })}
@@ -366,109 +379,125 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
         <Text type="supporting">Tag transfers “Loan repayment” to count them.</Text>
       </Block>
 
-      <PlanSheets ds={ds} edit={edit} onClose={() => setEdit(null)} />
+      <PlanSheets ds={ds} now={now} edit={edit} onClose={() => setEdit(null)} />
     </>
   );
 }
 
-/** Income and the one control that splits it between the two wallets. */
-function MoneySection({ ds, now, onEditIncome }: { ds: Dataset; now: string; onEditIncome: () => void }) {
-  const alloc = useMemo(() => allocation(ds, now), [ds, now]);
-  const [sada, setSada] = useState(alloc.sadapay);
-  useEffect(() => setSada(alloc.sadapay), [alloc.sadapay]);
-  const naya = Math.max(0, alloc.income - sada);
-  const dirty = sada !== alloc.sadapay;
-  const step = 50_000; // Rs 500
-  const suggested = alloc.suggested;
+const short = (m: string) => monthLabel(m).split(" ")[0];
+
+/** Income (what you sent yourself from Meezan) and the suggested split between the wallets. Read-only. */
+function MoneySection({ ds, now, onIncome }: { ds: Dataset; now: string; onIncome: () => void }) {
+  const income = useMemo(() => monthlyIncome(ds, now), [ds, now]);
+  const split = useMemo(() => suggestedSplit(ds, now), [ds, now]);
+  const first = income.months[0]?.month;
+  const last = income.months.at(-1)?.month;
+  const basis =
+    income.basis === "average" && first && last
+      ? `avg of ${first === last ? short(first) : `${short(first)}–${short(last)}`}`
+      : income.basis === "this_month"
+        ? "this month"
+        : "no transfers yet";
   return (
-    <Block
-      title="This month's money"
-      aside={
-        <Button variant="text" size="sm" onClick={onEditIncome}>
-          Income {formatRs(alloc.income)}
-        </Button>
-      }
-    >
+    <Block title="This month's money">
       <Card>
         <VStack gap={4} data-testid="allocation">
+          <List edge="outset">
+            <ListItem
+              label="Income"
+              description={`From Arqam (Meezan) · ${basis}`}
+              endContent={
+                <HStack gap={2} vAlign="center">
+                  <Money value={income.amount} className="font-medium" />
+                  {income.months.length > 0 ? (
+                    <ChevronRight className="shrink-0 text-fg-subtle" aria-hidden />
+                  ) : null}
+                </HStack>
+              }
+              {...opt({ onClick: income.months.length > 0 ? onIncome : undefined })}
+            />
+          </List>
           <HStack justify="between" gap={4}>
             <VStack gap={1}>
-              <Text type="supporting">SadaPay</Text>
-              <Money value={sada} className="text-xl font-medium" />
+              <HStack gap={2} vAlign="center">
+                <Text type="supporting">SadaPay</Text>
+                <Badge label="Suggested" variant="teal" />
+              </HStack>
+              <Money value={split.sadapay} className="text-xl font-medium" />
             </VStack>
             <VStack gap={1} hAlign="end">
               <Text type="supporting">NayaPay</Text>
-              <Money value={naya} className="text-xl font-medium" />
+              <Money value={split.nayapay} className="text-xl font-medium" />
             </VStack>
           </HStack>
-          <Slider
-            label="SadaPay share"
-            value={sada}
-            onValueChange={(v) => setSada(Math.round(v / step) * step)}
-            min={0}
-            max={alloc.income}
-            step={step}
-          />
-          <List
-            edge="flush"
-            density="compact"
-            header={
-              <HStack justify="between" vAlign="center" gap={4}>
-                <HStack gap={2} vAlign="center">
-                  <Text weight="medium">Suggested</Text>
-                  {alloc.source === "user" ? null : <Badge label="In use" variant="teal" />}
-                </HStack>
-                <Money value={suggested.sadapay} className="font-medium" />
-              </HStack>
-            }
-          >
-            {suggested.lines
-              .filter((l) => l.account_id === "sadapay")
-              .map((l) => (
-                <ListItem
-                  key={l.label}
-                  label={l.label}
-                  endContent={<Money value={l.amount} tone="muted" />}
-                />
-              ))}
+          <List edge="outset" density="compact" hasDividers>
+            {split.lines.map((l) => (
+              <ListItem
+                key={`${l.account_id}-${l.label}`}
+                label={l.label}
+                description={WALLET[l.account_id]}
+                endContent={<Money value={l.amount} tone="muted" />}
+              />
+            ))}
           </List>
-          {dirty || sada !== suggested.sadapay || alloc.source === "user" ? (
-            <HStack gap={2} wrap="wrap">
-              {dirty ? (
-                <Button
-                  variant="primary"
-                  onClick={() =>
-                    void enqueue("setSetting", { key: "allocation_sadapay", value: String(sada) })
-                  }
-                >
-                  Save split
-                </Button>
-              ) : null}
-              {sada !== suggested.sadapay ? (
-                <Button variant="ghost" onClick={() => setSada(suggested.sadapay)}>
-                  Use suggestion
-                </Button>
-              ) : null}
-              {alloc.source === "user" && !dirty ? (
-                <Button
-                  variant="ghost"
-                  onClick={() => void enqueue("setSetting", { key: "allocation_sadapay", value: "" })}
-                >
-                  Auto-follow suggestion
-                </Button>
-              ) : null}
-            </HStack>
-          ) : null}
         </VStack>
       </Card>
     </Block>
   );
 }
 
-function PlanSheets({ ds, edit, onClose }: { ds: Dataset; edit: Edit | null; onClose: () => void }) {
+/** The bank → wallet transfers behind the income figure, by month. */
+function IncomeList({ ds, now }: { ds: Dataset; now: string }) {
+  const income = monthlyIncome(ds, now);
+  return (
+    <VStack gap={5}>
+      {income.months.map((m) => {
+        const rows = ds.transactions
+          .filter(
+            (t) => !t.deleted && t.flow === "funding" && t.amount > 0 && monthOf(t.occurred_at) === m.month,
+          )
+          .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+        return (
+          <List
+            key={m.month}
+            hasDividers
+            density="compact"
+            header={
+              <HStack justify="between" vAlign="center" gap={4}>
+                <Text weight="medium">{monthLabel(m.month)}</Text>
+                <Money value={m.amount} className="font-medium" />
+              </HStack>
+            }
+          >
+            {rows.map((t) => (
+              <ListItem
+                key={t.id}
+                label={dayLabel(t.occurred_at.slice(0, 10))}
+                description={WALLET[t.account_id]}
+                endContent={<Money value={t.amount} />}
+              />
+            ))}
+          </List>
+        );
+      })}
+    </VStack>
+  );
+}
+
+function PlanSheets({
+  ds,
+  now,
+  edit,
+  onClose,
+}: {
+  ds: Dataset;
+  now: string;
+  edit: Edit | null;
+  onClose: () => void;
+}) {
   const title =
     edit?.kind === "income"
-      ? "Monthly income"
+      ? "Income from Arqam (Meezan)"
       : edit?.kind === "loan"
         ? edit.loan
           ? `${edit.loan.lender} · ${edit.loan.purpose}`
@@ -484,7 +513,7 @@ function PlanSheets({ ds, edit, onClose }: { ds: Dataset; edit: Edit | null; onC
                 : "";
   return (
     <Sheet open={edit !== null} onOpenChange={(o) => !o && onClose()} title={title} purpose="form">
-      {edit?.kind === "income" ? <IncomeForm ds={ds} onDone={onClose} /> : null}
+      {edit?.kind === "income" ? <IncomeList ds={ds} now={now} /> : null}
       {edit?.kind === "loan" ? <LoanForm loan={edit.loan} onDone={onClose} /> : null}
       {edit?.kind === "goal" ? <GoalForm goal={edit.goal} count={ds.goals.length} onDone={onClose} /> : null}
       {edit?.kind === "move" ? <MoveForm goal={edit.goal} onDone={onClose} /> : null}
@@ -511,7 +540,7 @@ function PlanSheets({ ds, edit, onClose }: { ds: Dataset; edit: Edit | null; onC
         />
       ) : null}
       {edit?.kind === "budget" ? (
-        <BudgetForm category={edit.category} average={edit.average} onDone={onClose} />
+        <BudgetForm category={edit.category} basis={edit.basis} onDone={onClose} />
       ) : null}
     </Sheet>
   );
@@ -535,11 +564,11 @@ function Form({ onSubmit, children }: { onSubmit: () => void; children: ReactNod
 
 function BudgetForm({
   category,
-  average,
+  basis,
   onDone,
 }: {
   category: Category;
-  average: number | null;
+  basis: Basis | null;
   onDone: () => void;
 }) {
   const [v, setV] = useState(rs(category.budget ?? undefined));
@@ -566,41 +595,20 @@ function BudgetForm({
         value={v}
         onChange={setV}
         autoFocus
-        description={average !== null ? `Avg ${formatRs(average)} · empty = avg` : "Empty = use the average"}
+        description={basis ? `${basisText(basis)} · empty = that` : "Empty = no budget"}
       />
       <Button type="submit" variant="primary" size="lg">
-        {paisa ? `Budget ${formatRs(paisa)} a month` : "Use the average"}
+        {paisa
+          ? `Budget ${formatRs(paisa)} a month`
+          : basis?.source === "estimate"
+            ? "Use the estimate"
+            : "Use the average"}
       </Button>
     </Form>
   );
 }
 
 const rs = (paisa: number | undefined): string => (paisa ? String(paisa / 100) : "");
-
-function IncomeForm({ ds, onDone }: { ds: Dataset; onDone: () => void }) {
-  const [v, setV] = useState(rs(Number(setting(ds, "income_monthly"))));
-  const paisa = parseRs(v);
-  return (
-    <Form
-      onSubmit={() => {
-        if (paisa === null) return;
-        void enqueue("setSetting", { key: "income_monthly", value: String(paisa) });
-        onDone();
-      }}
-    >
-      <MoneyInput
-        label="Monthly income"
-        value={v}
-        onChange={setV}
-        autoFocus
-        description="From Meezan into both wallets. Not counted as income."
-      />
-      <Button type="submit" variant="primary" size="lg" disabled={paisa === null}>
-        Save
-      </Button>
-    </Form>
-  );
-}
 
 function LoanForm({ loan, onDone }: { loan: Loan | undefined; onDone: () => void }) {
   const [lender, setLender] = useState(loan?.lender ?? "Mom");

@@ -5,6 +5,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import {
+  addDays,
   classify,
   type Dataset,
   dayLabel,
@@ -96,15 +97,30 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
   const pattern = rule?.pattern ?? null;
   const flows = txn.amount < 0 ? OUT_FLOWS : IN_FLOWS;
   const loans = ds.loans.filter((l) => l.closed_on === null || l.id === loanId);
-  const candidates = useMemo(
-    () =>
-      ds.transactions
-        .filter((t) => t.amount < 0 && t.flow === "spend" && t.occurred_at <= txn.occurred_at)
-        .filter((t) => !txn.counterparty_id || t.counterparty_id === txn.counterparty_id || t.id === linked)
-        .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))
-        .slice(0, 8),
-    [ds, txn, linked],
-  );
+  // A payback rarely matches to the rupee and usually comes from someone other than the merchant: offer recent
+  // spends (60 days up to the payback) whose amount is closest, then the newest.
+  const candidates = useMemo(() => {
+    const from = addDays(txn.occurred_at.slice(0, 10), -60);
+    const gap = (t: Transaction) => Math.abs(txn.amount + t.amount);
+    const near = ds.transactions
+      .filter(
+        (t) =>
+          t.id !== txn.id &&
+          t.amount < 0 &&
+          t.flow === "spend" &&
+          t.occurred_at <= txn.occurred_at &&
+          t.occurred_at.slice(0, 10) >= from,
+      )
+      .sort((a, b) => gap(a) - gap(b) || b.occurred_at.localeCompare(a.occurred_at))
+      .slice(0, 10);
+    const current = linked ? ds.transactions.find((t) => t.id === linked) : undefined;
+    return current && !near.some((t) => t.id === current.id) ? [current, ...near] : near;
+  }, [ds, txn, linked]);
+  /** "+Rs 300 extra" / "Rs 200 short" / "exact": the payback against the expense. */
+  const diff = (t: Transaction) => {
+    const d = txn.amount + t.amount;
+    return d === 0 ? "exact" : d > 0 ? `${formatRs(d, { sign: true })} extra` : `${formatRs(-d)} short`;
+  };
   const l = lookup(ds);
   const showCategory = flow === "spend" || flow === "fee" || flow === "reimbursement";
 
@@ -268,7 +284,7 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
             { value: "", label: "Not linked" },
             ...candidates.map((t) => ({
               value: t.id,
-              label: `${formatRs(t.amount)} · ${txnTitle(t, l)} · ${dayLabel(t.occurred_at.slice(0, 10))}`,
+              label: `${formatRs(-t.amount)} · ${txnTitle(t, l)} · ${dayLabel(t.occurred_at.slice(0, 10))} · ${diff(t)}`,
             })),
           ]}
         />
