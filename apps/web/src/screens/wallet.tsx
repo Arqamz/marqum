@@ -121,7 +121,7 @@ function WalletContent({ ds, now, id, month }: { ds: Dataset; now: string; id: A
             </Text>
             {below || unverified ? (
               <HStack gap={2} wrap="wrap">
-                {below ? <Badge variant="warning" label={`${formatRs(below)} below floor`} /> : null}
+                {below ? <Badge variant="warning" label={`${formatRs(below)} under your minimum`} /> : null}
                 {unverified ? (
                   <Badge variant="neutral" label={`${formatRs(unverified, { sign: true })} unverified`} />
                 ) : null}

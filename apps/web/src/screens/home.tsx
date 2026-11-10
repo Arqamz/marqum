@@ -23,7 +23,7 @@ import {
   type WalletPosition,
 } from "@marqum/core";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowDownLeft, ArrowUpRight, Plus } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Plus, TrendingDown, TrendingUp } from "lucide-react";
 import { useMemo } from "react";
 import { WalletLogo } from "../components/brand-logo.tsx";
 import { CategoryTile } from "../components/category-icon.tsx";
@@ -119,11 +119,14 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
       <CloseBanner ds={ds} now={now} />
       <VStack as="section" gap={2} hAlign="center" paddingBlockStart={4} data-testid="hero">
         <Text type="label" color="secondary">
-          Net position
+          {np.in_debt ? "Net position · in debt" : "Net position"}
         </Text>
         <HeroAmount
           value={np.net}
-          className={cn("text-hero font-semibold transition-colors", np.net < 0 ? "text-neg" : "text-fg")}
+          className={cn(
+            "text-hero font-semibold transition-colors",
+            np.in_debt || np.net < 0 ? "text-neg" : "text-fg",
+          )}
         />
         <HStack gap={2} hAlign="center" wrap="wrap" vAlign="center">
           <Text type="supporting" hasTabularNumbers>
@@ -132,7 +135,7 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
           <Ticker value={pulse.vs_pace} label="your usual month by this day" suffix="vs usual" />
         </HStack>
         {debtLine ? (
-          <Text type="supporting" justify="center" textWrap="balance" data-testid="debt-line">
+          <Text type="large" weight="semibold" justify="center" textWrap="balance" data-testid="debt-line">
             <span className="text-neg">In debt · {debtLine}</span>
           </Text>
         ) : null}
@@ -179,6 +182,7 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
         <Grid columns={2} gap={3}>
           {cards
             .filter((c) => c.spent > 0)
+            .sort((a, b) => b.spent - a.spent)
             .map((c) => (
               <CategoryTileCard key={c.category.id} c={c} month={month} />
             ))}
@@ -233,10 +237,7 @@ function WalletCard({ ds, w, month, now }: { ds: Dataset; w: WalletPosition; mon
             </HStack>
           </StackItem>
           {below && w.floor !== null ? (
-            <Badge
-              variant="warning"
-              label={`${formatRs(w.floor - w.balance, { compact: true })} below floor`}
-            />
+            <Badge variant="warning" label={`Under your ${formatRs(w.floor, { compact: true })} minimum`} />
           ) : null}
           {w.provisional_delta !== 0 ? (
             <Badge
@@ -251,19 +252,14 @@ function WalletCard({ ds, w, month, now }: { ds: Dataset; w: WalletPosition; mon
 }
 
 /**
- * One glance: the amount, a ▲/▼ against the usual month at this day, and a bar of spend vs usual whose colour
- * carries the state (red over, green under, grey before there's a usual).
+ * One glance: icon, ▲/▼ in the corner, name, amount, and a tiny month-end estimate. The card's own colour carries
+ * the state — red when you're spending faster than usual by this day, green when slower, plain before there's a usual.
  */
 function CategoryTileCard({ c, month }: { c: CategoryCard; month: string }) {
   const state =
     c.vs_pace === null ? "none" : c.vs_pace > 0.03 ? "over" : c.vs_pace < -0.03 ? "under" : "even";
-  const usual = c.baseline ?? (c.projected > c.spent ? c.projected : null);
-  const usualLabel =
-    c.baseline !== null
-      ? `${c.baseline_source === "budget" ? "budget" : "avg"} ${formatRs(c.baseline, { compact: true })}`
-      : usual !== null
-        ? `~${formatRs(usual, { compact: true })} by month end`
-        : null;
+  const Arrow = state === "over" ? TrendingUp : state === "under" ? TrendingDown : null;
+  const pct = c.vs_pace === null ? null : Math.round(Math.abs(c.vs_pace) * 100);
   return (
     <Link
       to="/category/$id"
@@ -278,38 +274,25 @@ function CategoryTileCard({ c, month }: { c: CategoryCard; month: string }) {
         padding={3}
         variant={state === "over" ? "red" : state === "under" ? "green" : "default"}
       >
-        <VStack gap={2}>
-          <HStack gap={2} vAlign="center">
+        <VStack gap={1.5}>
+          <HStack justify="between" vAlign="start">
             <CategoryTile id={c.category.id} name={c.category.icon} size="sm" />
-            <StackItem size="fill">
-              <Text type="label" maxLines={1} hasTruncateTooltip={false}>
-                {c.category.name}
-              </Text>
-            </StackItem>
-            <Ticker value={c.vs_pace} label={c.baseline_source === "budget" ? "budget" : "average"} />
-          </HStack>
-          <Money value={c.spent} className="text-xl font-semibold" />
-          {usual !== null ? (
-            <span
-              className="block h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-background-muted)]"
-              aria-hidden
-            >
-              <span
-                className={cn(
-                  "block h-full rounded-full",
-                  state === "over"
-                    ? "bg-error"
-                    : state === "under"
-                      ? "bg-success"
-                      : "bg-[var(--color-text-secondary)]",
-                )}
-                style={{ width: `${Math.round((Math.min(c.spent, usual) / usual) * 100)}%` }}
+            {Arrow ? (
+              <Arrow
+                size={18}
+                strokeWidth={2.5}
+                className={state === "over" ? "text-neg" : "text-pos"}
+                aria-label={`${pct}% ${state === "over" ? "above" : "below"} usual`}
               />
-            </span>
-          ) : null}
-          {usualLabel ? (
-            <Text type="supporting" size="xsm" hasTabularNumbers>
-              {usualLabel}
+            ) : null}
+          </HStack>
+          <Text type="label" maxLines={1} hasTruncateTooltip={false}>
+            {c.category.name}
+          </Text>
+          <Money value={c.spent} className="text-xl font-semibold" />
+          {c.projected > c.spent ? (
+            <Text type="supporting" size="3xs" hasTabularNumbers>
+              ~{formatRs(c.projected, { compact: true })} by month end
             </Text>
           ) : null}
         </VStack>

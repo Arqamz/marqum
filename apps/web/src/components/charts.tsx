@@ -113,7 +113,10 @@ export interface MonthBar {
   current?: boolean;
 }
 
-/** 12-month bars; the current month in accent, past months soft accent, unusual months amber. */
+/**
+ * One bar per month; the current month in accent, the others soft accent, unusual months amber. With 6 or fewer
+ * bars the axis shows "Nov", otherwise "N".
+ */
 export function MonthlyBars({
   data,
   average,
@@ -123,13 +126,14 @@ export function MonthlyBars({
   average?: number | null;
   onSelect?: (month: string) => void;
 }) {
+  const short = data.length <= 6;
   return (
-    <VStack className="h-48 w-full" data-testid="monthly-bars">
+    <VStack className="h-44 w-full" data-testid="monthly-bars">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 0, bottom: 0, left: 0 }} barCategoryGap={2}>
           <XAxis
             dataKey="month"
-            tickFormatter={(m: string) => monthShort(m).slice(0, 1)}
+            tickFormatter={(m: string) => (short ? monthShort(m) : monthShort(m).slice(0, 1))}
             tick={AXIS}
             axisLine={false}
             tickLine={false}
@@ -155,7 +159,7 @@ export function MonthlyBars({
           <Bar
             dataKey="value"
             radius={[4, 4, 0, 0]}
-            maxBarSize={28}
+            maxBarSize={short ? 40 : 28}
             isAnimationActive={false}
             {...(onSelect
               ? {
@@ -366,7 +370,7 @@ export function DailyBars({
   average?: number | null;
 }) {
   return (
-    <VStack className="h-40 w-full" data-testid="daily-bars">
+    <VStack className="h-44 w-full" data-testid="daily-bars">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 0, bottom: 0, left: 0 }} barCategoryGap={1}>
           <XAxis

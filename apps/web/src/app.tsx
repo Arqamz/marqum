@@ -2,6 +2,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { LucideProvider } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DatasetProvider } from "./components/dataset-provider.tsx";
+import { DebtMode } from "./components/debt-mode.tsx";
 import { PromptHost } from "./components/prompt-host.tsx";
 import { QuickAddHost } from "./components/quick-add.tsx";
 import { Wordmark } from "./components/shell.tsx";
@@ -46,6 +47,7 @@ export function App() {
         ) : (
           <RouterProvider router={router} />
         )}
+        {signedIn ? <DebtMode /> : null}
         <QuickAddHost />
         <PromptHost />
         <Toaster />

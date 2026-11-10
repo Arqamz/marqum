@@ -1,5 +1,7 @@
 import { Banner } from "@astryxdesign/core/Banner";
+import { Card } from "@astryxdesign/core/Card";
 import { HStack } from "@astryxdesign/core/HStack";
+import { List, ListItem } from "@astryxdesign/core/List";
 import { Selector } from "@astryxdesign/core/Selector";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
@@ -17,6 +19,7 @@ import {
   rememberRule,
 } from "@marqum/core";
 import type { Flow, Transaction } from "@marqum/schema";
+import { ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { enqueue, newId } from "../lib/commands.ts";
 import { monthName } from "../lib/months.ts";
@@ -25,6 +28,7 @@ import { stepUp } from "../lib/stepup.ts";
 import { escapeRegex, FLOW_LABEL, IN_FLOWS, lookup, OUT_FLOWS, timeOf, txnTitle } from "../lib/view.ts";
 import { CategoryPicker } from "./category-picker.tsx";
 import { useDataset } from "./dataset-provider.tsx";
+import { Money } from "./money.tsx";
 import { Button } from "./ui/button.tsx";
 import { Chip, Segmented, Switch } from "./ui/controls.tsx";
 import { MoneyInput } from "./ui/input.tsx";
@@ -33,26 +37,87 @@ import { Sheet } from "./ui/sheet.tsx";
 /** Tag a transaction: reason (suggests a category as you type), category, flow, links, "always". */
 export function TagSheet({ txn, onClose }: { txn: Transaction | null; onClose: () => void }) {
   const ds = useDataset();
+  // Tapping a linked transaction switches the sheet to it.
+  // remembers which opened transaction the jump belongs to, so opening another one starts fresh
+  const [jump, setJumpState] = useState<{ from: string; to: string } | null>(null);
+  const setJump = (to: string) => txn && setJumpState({ from: txn.id, to });
+  const target = jump && jump.from === txn?.id ? jump.to : null;
+  const shown = (target && ds?.transactions.find((t) => t.id === target)) || txn;
   return (
     <Sheet
       purpose="form"
       open={txn !== null}
       onOpenChange={(o) => !o && onClose()}
       title={
-        txn && ds ? `${formatRs(txn.amount, { sign: txn.amount > 0 })} · ${txnTitle(txn, lookup(ds))}` : ""
+        shown && ds
+          ? `${formatRs(shown.amount, { sign: shown.amount > 0 })} · ${txnTitle(shown, lookup(ds))}`
+          : ""
       }
       description={
-        txn && ds
-          ? `${dayLabel(txn.occurred_at.slice(0, 10))}, ${timeOf(txn.occurred_at)} · ${ds.accounts.find((a) => a.id === txn.account_id)?.name ?? ""}`
+        shown && ds
+          ? `${dayLabel(shown.occurred_at.slice(0, 10))}, ${timeOf(shown.occurred_at)} · ${ds.accounts.find((a) => a.id === shown.account_id)?.name ?? ""}`
           : undefined
       }
     >
-      {txn && ds ? <TagForm key={txn.id} ds={ds} txn={txn} onDone={onClose} /> : null}
+      {shown && ds ? <TagForm key={shown.id} ds={ds} txn={shown} onDone={onClose} onJump={setJump} /> : null}
     </Sheet>
   );
 }
 
-function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: () => void }) {
+/** The other side of a payback link: the expense a payback is for, or the paybacks an expense got. */
+function LinkedTxns({
+  ds,
+  txn,
+  linked,
+  onJump,
+}: {
+  ds: Dataset;
+  txn: Transaction;
+  linked: string | null;
+  onJump: (id: string) => void;
+}) {
+  const l = lookup(ds);
+  const rows = [
+    ...(linked ? ds.transactions.filter((t) => t.id === linked && !t.deleted) : []),
+    ...ds.transactions.filter((t) => !t.deleted && t.flow === "reimbursement" && t.linked_txn_id === txn.id),
+  ];
+  if (rows.length === 0) return null;
+  return (
+    <VStack gap={1} data-testid="linked-txns">
+      <Text type="label">{txn.flow === "reimbursement" ? "Pays back" : "Paid back by"}</Text>
+      <Card variant="muted" padding={0}>
+        <List hasDividers density="compact">
+          {rows.map((t) => (
+            <ListItem
+              key={t.id}
+              onClick={() => onJump(t.id)}
+              label={txnTitle(t, l)}
+              description={dayLabel(t.occurred_at.slice(0, 10))}
+              endContent={
+                <HStack gap={1} vAlign="center">
+                  <Money value={Math.abs(t.amount)} {...(t.amount > 0 ? { tone: "pos" as const } : {})} />
+                  <ChevronRight size={16} aria-hidden />
+                </HStack>
+              }
+            />
+          ))}
+        </List>
+      </Card>
+    </VStack>
+  );
+}
+
+function TagForm({
+  ds,
+  txn,
+  onDone,
+  onJump,
+}: {
+  ds: Dataset;
+  txn: Transaction;
+  onDone: () => void;
+  onJump: (id: string) => void;
+}) {
   const [reason, setReason] = useState(txn.reason ?? "");
   const [category, setCategory] = useState<string | null>(txn.category_id);
   const [picked, setPicked] = useState(txn.category_id !== null);
@@ -157,9 +222,14 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
         if (!ok) return;
       }
       await saveRepeat();
+      const linkedTxn =
+        flow === "reimbursement" && linked ? ds.transactions.find((t) => t.id === linked) : undefined;
+      const finalReason = linkedTxn
+        ? `Payback for “${txnTitle(linkedTxn, lookup(ds))}”`
+        : reason.trim() || null;
       await enqueue("tagTransaction", {
         txn_id: txn.id,
-        reason: reason.trim() || null,
+        reason: finalReason,
         category_id: showCategory ? category : null,
         ...(counterparty !== txn.counterparty_id ? { counterparty_id: counterparty } : {}),
         ...(closed
@@ -204,13 +274,17 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
         </Text>
       ) : null}
 
-      <TextInput
-        label="Reason"
-        value={reason}
-        onChange={setReason}
-        placeholder="What was it for?"
-        enterKeyHint="done"
-      />
+      <LinkedTxns ds={ds} txn={txn} linked={flow === "reimbursement" ? linked : null} onJump={onJump} />
+
+      {flow === "reimbursement" ? null : (
+        <TextInput
+          label="Reason"
+          value={reason}
+          onChange={setReason}
+          placeholder="What was it for?"
+          enterKeyHint="done"
+        />
+      )}
 
       {!closed ? (
         <HStack gap={2} wrap="wrap" role="radiogroup" aria-label="Kind">

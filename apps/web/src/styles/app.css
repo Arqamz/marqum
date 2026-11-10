@@ -204,3 +204,23 @@ html {
     scroll-padding-bottom: 1rem;
   }
 }
+
+/* In debt: the whole app goes black and red until the last loan is repaid (components/debt-mode.tsx). */
+html[data-debt] {
+  color-scheme: dark;
+  --bg: #0a0a0b;
+  --surface: #17171a;
+}
+html[data-debt] [data-astryx-theme="marqum"] {
+  color-scheme: dark;
+  --color-background-body: #0a0a0b;
+  --color-background-card: #17171a;
+  --color-accent: #ff3b30;
+  --color-accent-muted: #ff3b3026;
+  --color-text-accent: #ff5a50;
+  --color-icon-accent: #ff5a50;
+  --color-on-accent: #0a0a0b;
+}
+html[data-debt] body {
+  background: #0a0a0b;
+}
