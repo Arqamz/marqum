@@ -8,6 +8,7 @@ import {
   loanStatus,
   plannedCategories,
   project,
+  savingsHistory,
   suggestedSplit,
   whatIf,
 } from "../src/planning.ts";
@@ -42,7 +43,7 @@ function fixture(food = [30000, 30000, 30000], extra: Partial<Dataset> = {}): Da
       account_id: "sadapay",
       occurred_at: `${m}-08T12:00`,
       amount: -rs(2000),
-      category_id: "subscriptions.vps",
+      category_id: "subscriptions.professional",
     }),
   ]);
   const bike = goal({ id: "bike", name: "Bicycle", target: rs(50000), monthly: rs(10000), priority: 1 });
@@ -278,7 +279,7 @@ describe("whatIf: save", () => {
       verdict: "no",
       confidence: "no",
       months_to_save: 8,
-      headline: "Not within 6 months — ready between Jul and Aug 2027 (most likely Jul)",
+      headline: "Not within 6 months — ready Jul 2027 at Rs 23,750/month",
     });
   });
   it("no — surplus ≤ 0", () => {
@@ -288,7 +289,7 @@ describe("whatIf: save", () => {
       confidence: "no",
       months_to_save: null,
       ready_month: null,
-      headline: "Not affordable — your monthly surplus is −Rs 36,000",
+      headline: "Not affordable — your monthly surplus is −Rs 35,000",
     });
   });
   it("levers and assumptions change the result", () => {
@@ -345,7 +346,7 @@ describe("whatIf: loan", () => {
     const r = whatIf(ds, { price: rs(300000), mode: "loan", loan_months: 10 }, NOW);
     expect(r).toMatchObject({
       verdict: "no",
-      headline: "Not affordable — Rs 30,000/month is more than your Rs 19,000 monthly surplus",
+      headline: "Not affordable — Rs 30,000/month is more than your Rs 20,000 monthly surplus",
     });
     expect(r.risk_months.length).toBeGreaterThan(0);
     expect(r.goal_delays).toEqual([{ goal_id: "bike", name: "Bicycle", months: 10 }]);
@@ -381,8 +382,25 @@ describe("whatIf: loan", () => {
     expect(r.verdict).toBe("no");
     expect(r.goal_delays).toEqual([
       { goal_id: "bike", name: "Bicycle", months: 0 },
-      { goal_id: "phone", name: "Phone", months: 3 },
+      { goal_id: "phone", name: "Phone", months: 2 },
     ]);
+  });
+});
+
+describe("savingsHistory (what the what-if decides on)", () => {
+  it("averages what both wallets kept in complete months; a month without pay counts your set income", () => {
+    const h = savingsHistory(fixture(), NOW);
+    expect(h.basis).toBe("history");
+    expect(h.months.map((m) => m.month)).toEqual(["2026-08", "2026-09", "2026-10"]);
+    expect(h.months.every((m) => !m.partial)).toBe(true);
+    expect(h.average).toBe(Math.round(h.months.reduce((s, m) => s + m.saved, 0) / 3));
+    expect(whatIf(fixture(), { price: rs(1000), mode: "save" }, NOW).savings).toEqual(h);
+  });
+  it("first month: an estimate from income minus spend so far at today's pace", () => {
+    const ds = seeded("2026-11-01");
+    const h = savingsHistory(ds, NOW);
+    expect(h).toMatchObject({ basis: "estimate", average: rs(85000) });
+    expect(h.months).toEqual([{ month: "2026-11", saved: rs(85000), partial: true }]);
   });
 });
 

@@ -1,3 +1,15 @@
+import { Badge } from "@astryxdesign/core/Badge";
+import { Card } from "@astryxdesign/core/Card";
+import { ClickableCard } from "@astryxdesign/core/ClickableCard";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { List, ListItem } from "@astryxdesign/core/List";
+import { ProgressBar } from "@astryxdesign/core/ProgressBar";
+import { StackItem } from "@astryxdesign/core/Stack";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import {
   allocation,
   budgetModel,
@@ -16,27 +28,30 @@ import {
 } from "@marqum/core";
 import type { AccountId, Category, Goal, Loan, Recurring } from "@marqum/schema";
 import { ChevronRight, Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { CategoryIcon } from "../components/category-icon.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { Money } from "../components/money.tsx";
 import { RecurringForm } from "../components/recurring-form.tsx";
-import { Headline, Screen, Section } from "../components/shell.tsx";
+import { Screen } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Segmented, Skeleton, Slider } from "../components/ui/controls.tsx";
 import { Field, Input, MoneyInput } from "../components/ui/input.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
-import { cn } from "../lib/cn.ts";
-import { cadenceLabel, KIND_LABEL, kindFor, monthlyEquivalent } from "../lib/recurring.ts";
-
-const STATUS_LABEL = {
-  paid: "paid this month",
-  due: "due now",
-  upcoming: "upcoming",
-  missed: "missed",
-} as const;
-
 import { enqueue, newId } from "../lib/commands.ts";
+import {
+  cadenceLabel,
+  KIND_LABEL,
+  kindFor,
+  monthlyEquivalent,
+  type RecurringKind,
+} from "../lib/recurring.ts";
+
+const STATUS = {
+  paid: { label: "Paid", variant: "success" },
+  due: { label: "Due", variant: "warning" },
+  missed: { label: "Missed", variant: "error" },
+} as const;
 
 export function PlanScreen() {
   const ds = useDataset();
@@ -46,33 +61,26 @@ export function PlanScreen() {
       {ds ? (
         <PlanContent ds={ds} now={now} />
       ) : (
-        <div className="flex flex-col gap-4">
-          <Skeleton className="h-8 w-3/4" />
-          <Skeleton className="h-32 rounded-card" />
-          <Skeleton className="h-32 rounded-card" />
-        </div>
+        <VStack gap={4}>
+          <Skeleton height={32} width="75%" />
+          <Skeleton height={128} />
+          <Skeleton height={128} />
+        </VStack>
       )}
     </Screen>
   );
 }
 
-function Progress({ value, tone = "fg" }: { value: number; tone?: "fg" | "pos" | "neg" }) {
+/** Heading level 2 with an optional action on the right. */
+function Block({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
   return (
-    <div
-      className="h-1.5 rounded-full bg-surface-2"
-      role="progressbar"
-      aria-valuenow={Math.round(value * 100)}
-      aria-valuemin={0}
-      aria-valuemax={100}
-    >
-      <div
-        className={cn(
-          "h-1.5 rounded-full",
-          tone === "pos" ? "bg-pos" : tone === "neg" ? "bg-neg" : "bg-[var(--chart-bar-current)]",
-        )}
-        style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }}
-      />
-    </div>
+    <VStack as="section" gap={3}>
+      <HStack justify="between" vAlign="center" gap={4}>
+        <Heading level={2}>{title}</Heading>
+        {aside}
+      </HStack>
+      {children}
+    </VStack>
   );
 }
 
@@ -85,7 +93,6 @@ type Edit =
   | { kind: "budget"; category: Category; average: number | null };
 
 const WALLET: Record<AccountId, string> = { sadapay: "SadaPay", nayapay: "NayaPay" };
-const card = "flex flex-col gap-4 rounded-card bg-surface p-4";
 
 function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
   const model = useMemo(() => budgetModel(ds, now), [ds, now]);
@@ -101,11 +108,6 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
   }, [ds]);
   const [edit, setEdit] = useState<Edit | null>(null);
   const fixedTotal = fixed.reduce((sum, r) => sum + monthlyEquivalent(r), 0);
-  const yearly = fixed.filter((r) => r.cadence === "yearly");
-  const yearlyNote =
-    yearly.length > 0
-      ? `incl. ${yearly.map((r) => `${r.name} yearly as ${formatRs(monthlyEquivalent(r))}/month`).join(", ")}`
-      : null;
   const status = useMemo(
     () => new Map(expectedCharges(ds, monthOf(now), now).map((c) => [c.recurring.id, c])),
     [ds, now],
@@ -114,237 +116,255 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
     .filter((c) => c.parent_id === null && (!c.hidden || c.budget))
     .sort((a, b) => a.sort - b.sort);
   const planned = new Map(model.categories.map((c) => [c.category_id, c]));
+  const kinds = (Object.keys(KIND_LABEL) as RecurringKind[]).filter((k) => fixed.some((r) => r.kind === k));
 
   return (
     <>
-      <Headline
-        sub={`${formatRs(model.income)} in · ${formatRs(model.committed)} committed · ${formatRs(model.variable)} usual spending · ${formatRs(model.goal_contributions)} to goals`}
-      >
-        {model.surplus >= 0
-          ? `${formatRs(model.surplus)} a month to spare`
-          : `${formatRs(-model.surplus)} a month short`}
-      </Headline>
+      <VStack gap={2}>
+        <Heading level={1} type="display-3">
+          {model.surplus >= 0
+            ? `${formatRs(model.surplus)} a month to spare`
+            : `${formatRs(-model.surplus)} a month short`}
+        </Heading>
+        <Text color="secondary" hasTabularNumbers>
+          {formatRs(model.income)} in · {formatRs(model.committed)} fixed · {formatRs(model.variable)} usual ·{" "}
+          {formatRs(model.goal_contributions)} goals
+        </Text>
+      </VStack>
 
       <MoneySection ds={ds} now={now} onEditIncome={() => setEdit({ kind: "income" })} />
 
-      <Section
+      <Block
         title="Fixed charges"
-        aside={<span className="num text-sm text-fg-muted">{formatRs(fixedTotal)} a month</span>}
+        aside={
+          <Text type="supporting" hasTabularNumbers>
+            {formatRs(fixedTotal)}/mo
+          </Text>
+        }
       >
-        {yearlyNote ? <p className="-mt-1 num text-sm text-fg-muted">{yearlyNote}</p> : null}
-        <div className={card}>
-          {fixed.length === 0 ? (
-            <p className="text-sm text-fg-muted">
-              Subscriptions, bills and anything else that leaves every month or year. Add them so the plan
-              knows.
-            </p>
-          ) : (
-            <div className="flex flex-col gap-4" data-testid="fixed-charges">
-              {(["subscription", "bill", "other"] as const)
-                .filter((k) => fixed.some((r) => r.kind === k))
-                .map((k) => (
-                  <div key={k} className="flex flex-col gap-1">
-                    <span className="text-sm text-fg-muted">{KIND_LABEL[k]}</span>
-                    <ul className="-mx-2 flex flex-col">
-                      {fixed
-                        .filter((r) => r.kind === k)
-                        .map((r) => {
-                          const st = status.get(r.id);
-                          return (
-                            <li key={r.id}>
-                              <button
-                                type="button"
-                                onClick={() => setEdit({ kind: "fixed", recurring: r })}
-                                className="flex w-full items-center gap-3 rounded-inner px-2 py-2 text-left hover:bg-surface-2"
-                              >
-                                <span className="flex min-w-0 flex-1 flex-col">
-                                  <span className="truncate">{r.name}</span>
-                                  <span className="text-sm text-fg-muted">
-                                    {cadenceLabel(r)} · day {r.day_of_month} · {WALLET[r.account_id]}
-                                    {st ? (
-                                      <>
-                                        {" · "}
-                                        <span
-                                          className={cn(
-                                            st.status === "paid" && "text-pos",
-                                            (st.status === "missed" || st.status === "due") && "text-warn",
-                                          )}
-                                        >
-                                          {STATUS_LABEL[st.status]}
-                                        </span>
-                                      </>
-                                    ) : null}
-                                  </span>
-                                </span>
+        <Card>
+          <VStack gap={4}>
+            {fixed.length === 0 ? (
+              <EmptyState isCompact headingLevel={3} title="No fixed charges" />
+            ) : (
+              <VStack gap={4} data-testid="fixed-charges">
+                {kinds.map((k) => (
+                  <List key={k} edge="outset" hasDividers header={KIND_LABEL[k]}>
+                    {fixed
+                      .filter((r) => r.kind === k)
+                      .map((r) => {
+                        const st = status.get(r.id)?.status;
+                        const badge = st && st !== "upcoming" ? STATUS[st] : null;
+                        return (
+                          <ListItem
+                            key={r.id}
+                            label={r.name}
+                            description={`${cadenceLabel(r)} · day ${r.day_of_month} · ${WALLET[r.account_id]}`}
+                            endContent={
+                              <HStack gap={2} vAlign="center">
+                                {badge ? <Badge label={badge.label} variant={badge.variant} /> : null}
                                 <Money value={r.amount} className="font-medium" />
-                              </button>
-                            </li>
-                          );
-                        })}
-                    </ul>
-                  </div>
+                              </HStack>
+                            }
+                            onClick={() => setEdit({ kind: "fixed", recurring: r })}
+                          />
+                        );
+                      })}
+                  </List>
                 ))}
-            </div>
-          )}
-          <Button variant="secondary" className="self-start" onClick={() => setEdit({ kind: "fixed" })}>
-            <Plus aria-hidden />
-            Add subscription or bill
-          </Button>
-        </div>
+              </VStack>
+            )}
+            <HStack>
+              <Button
+                variant="secondary"
+                icon={<Plus aria-hidden />}
+                onClick={() => setEdit({ kind: "fixed" })}
+              >
+                Add subscription or bill
+              </Button>
+            </HStack>
+          </VStack>
+        </Card>
         {candidates.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            <span className="text-sm text-fg-muted">Looks recurring — add?</span>
-            <ul className="flex flex-col gap-1">
+          <Card variant="muted">
+            <List edge="outset" header="Looks recurring" density="compact">
               {candidates.map((c) => (
-                <li key={c.key} className="flex items-baseline justify-between gap-3 text-sm">
-                  <span className="min-w-0">
-                    {c.name}
-                    <span className="text-fg-muted">
-                      {" "}
-                      · {c.cadence === "yearly" ? "yearly · " : ""}
-                      {c.occurrences}× · around day {c.day_of_month}
-                    </span>
-                  </span>
-                  <span className="flex items-center gap-3">
-                    <Money value={c.amount} />
-                    <Button variant="text" size="sm" onClick={() => setEdit({ kind: "fixed", candidate: c })}>
-                      Add
-                    </Button>
-                  </span>
-                </li>
+                <ListItem
+                  key={c.key}
+                  label={c.name}
+                  description={`${c.cadence === "yearly" ? "Yearly · " : ""}${c.occurrences}× · day ${c.day_of_month}`}
+                  endContent={
+                    <HStack gap={2} vAlign="center">
+                      <Money value={c.amount} />
+                      <Button
+                        variant="text"
+                        size="sm"
+                        onClick={() => setEdit({ kind: "fixed", candidate: c })}
+                      >
+                        Add
+                      </Button>
+                    </HStack>
+                  }
+                />
               ))}
-            </ul>
-          </div>
+            </List>
+          </Card>
         ) : null}
-      </Section>
+      </Block>
 
-      <Section title="Monthly budgets">
-        <p className="-mt-1 text-sm text-fg-muted">
-          Used for planning while a category has little history. Leave empty to use the average.
-        </p>
-        <ul className={cn(card, "gap-0 px-2 py-2")} data-testid="budgets">
-          {tops.map((c) => {
-            const pc = planned.get(c.id);
-            const avg = pc?.source === "average" && pc.planned > 0 ? pc.planned : null;
-            return (
-              <li key={c.id}>
-                <button
-                  type="button"
+      <Block title="Monthly budgets">
+        <Card>
+          <List edge="outset" hasDividers data-testid="budgets">
+            {tops.map((c) => {
+              const pc = planned.get(c.id);
+              const avg = pc?.source === "average" && pc.planned > 0 ? pc.planned : null;
+              return (
+                <ListItem
+                  key={c.id}
+                  startContent={<CategoryIcon name={c.icon} className="shrink-0 text-fg-muted" />}
+                  label={c.name}
+                  description={
+                    pc?.source === "recurring"
+                      ? "Fixed charges"
+                      : avg !== null
+                        ? `avg ${formatRs(avg)}`
+                        : "No history"
+                  }
+                  endContent={
+                    <HStack gap={2} vAlign="center">
+                      {c.budget ? (
+                        <Money value={c.budget} className="font-medium" />
+                      ) : (
+                        <Text type="supporting">Set</Text>
+                      )}
+                      <ChevronRight className="shrink-0 text-fg-subtle" aria-hidden />
+                    </HStack>
+                  }
                   onClick={() => setEdit({ kind: "budget", category: c, average: avg })}
-                  className="flex w-full items-center gap-3 rounded-inner px-2 py-2 text-left hover:bg-surface-2"
-                >
-                  <CategoryIcon name={c.icon} className="shrink-0 text-fg-muted" />
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate">{c.name}</span>
-                    <span className="num text-sm text-fg-muted">
-                      {pc?.source === "recurring"
-                        ? "covered by fixed charges"
-                        : avg !== null
-                          ? `avg ${formatRs(avg)}`
-                          : "no history yet"}
-                    </span>
-                  </span>
-                  {c.budget ? (
-                    <Money value={c.budget} className="font-medium" />
-                  ) : (
-                    <span className="text-sm text-fg-muted">Set</span>
-                  )}
-                  <ChevronRight className="shrink-0 text-fg-subtle" aria-hidden />
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </Section>
+                />
+              );
+            })}
+          </List>
+        </Card>
+      </Block>
 
-      <Section
+      <Block
         title="Goals"
         aside={
-          <Button variant="text" size="sm" onClick={() => setEdit({ kind: "goal" })}>
+          <Button
+            variant="text"
+            size="sm"
+            icon={<Plus aria-hidden />}
+            onClick={() => setEdit({ kind: "goal" })}
+          >
             New goal
           </Button>
         }
       >
         {goals.length === 0 ? (
-          <p className="text-sm text-fg-muted">
-            No goals yet. A goal sets money aside inside SadaPay each month.
-          </p>
+          <EmptyState isCompact headingLevel={3} title="No goals" />
         ) : (
-          goals.map((g) => (
-            <div key={g.goal.id} className={card}>
-              <button
-                type="button"
-                className="flex items-center gap-3 text-left"
-                onClick={() => setEdit({ kind: "goal", goal: g.goal })}
-              >
-                <CategoryIcon name={g.goal.icon} className="text-fg-muted" />
-                <span className="flex-1 font-medium">{g.goal.name}</span>
-                <span className="num text-sm">
-                  {formatRs(g.saved)} <span className="text-fg-muted">of {formatRs(g.goal.target)}</span>
-                </span>
-              </button>
-              <Progress value={g.progress} tone={g.progress >= 1 ? "pos" : "fg"} />
-              <div className="flex items-baseline justify-between gap-4 text-sm">
-                <span className="num text-fg-muted">
-                  {g.progress >= 1
-                    ? "Reached"
-                    : `${formatRs(g.goal.monthly)}/month${g.eta_month ? ` · ready ${monthLabel(g.eta_month)}` : " · no date at this rate"}`}
-                </span>
-                <Button variant="text" size="sm" onClick={() => setEdit({ kind: "move", goal: g.goal })}>
-                  Move money
-                </Button>
-              </div>
-            </div>
-          ))
+          goals.map((g) => {
+            const done = g.progress >= 1;
+            return (
+              <Card key={g.goal.id}>
+                <VStack gap={3}>
+                  <List edge="outset">
+                    <ListItem
+                      startContent={<CategoryIcon name={g.goal.icon} className="text-fg-muted" />}
+                      label={g.goal.name}
+                      endContent={
+                        <Text hasTabularNumbers>
+                          {formatRs(g.saved)} <Text color="secondary">/ {formatRs(g.goal.target)}</Text>
+                        </Text>
+                      }
+                      onClick={() => setEdit({ kind: "goal", goal: g.goal })}
+                    />
+                  </List>
+                  <ProgressBar
+                    label={`${g.goal.name} progress`}
+                    isLabelHidden
+                    value={Math.min(1, Math.max(0, g.progress)) * 100}
+                    variant={done ? "success" : "accent"}
+                  />
+                  <HStack justify="between" vAlign="center" gap={4}>
+                    {done ? (
+                      <Badge label="Reached" variant="success" />
+                    ) : (
+                      <Text type="supporting" hasTabularNumbers>
+                        {formatRs(g.goal.monthly)}/mo · {g.eta_month ? monthLabel(g.eta_month) : "no date"}
+                      </Text>
+                    )}
+                    <Button variant="text" size="sm" onClick={() => setEdit({ kind: "move", goal: g.goal })}>
+                      Move money
+                    </Button>
+                  </HStack>
+                </VStack>
+              </Card>
+            );
+          })
         )}
-      </Section>
+      </Block>
 
-      <Section
+      <Block
         title="Loans"
         aside={
-          <Button variant="text" size="sm" onClick={() => setEdit({ kind: "loan" })}>
+          <Button
+            variant="text"
+            size="sm"
+            icon={<Plus aria-hidden />}
+            onClick={() => setEdit({ kind: "loan" })}
+          >
             New loan
           </Button>
         }
       >
         {loans.length === 0 ? (
-          <p className="text-sm text-fg-muted">
-            No loans. Big purchase coming? Record a loan and repay it monthly.
-          </p>
+          <EmptyState isCompact headingLevel={3} title="No loans" />
         ) : (
-          loans.map((x) => (
-            <button
-              key={x.loan.id}
-              type="button"
-              className={cn(card, "text-left")}
-              onClick={() => setEdit({ kind: "loan", loan: x.loan })}
-            >
-              <span className="flex items-baseline justify-between gap-4">
-                <span className="font-medium">
-                  {x.loan.lender} · {x.loan.purpose}
-                </span>
-                <Money
-                  value={x.outstanding}
-                  tone={x.outstanding > 0 ? "neg" : "pos"}
-                  className="font-medium"
-                />
-              </span>
-              <Progress value={x.progress} tone={x.outstanding > 0 ? "fg" : "pos"} />
-              <span className="num text-sm text-fg-muted">
-                {formatRs(x.repaid)} of {formatRs(x.loan.principal)} repaid
-                {x.outstanding > 0 && x.payoff_month
-                  ? ` · ${formatRs(x.loan.installment)}/month · clear by ${monthLabel(x.payoff_month)}`
-                  : x.outstanding <= 0
-                    ? " · cleared"
-                    : ""}
-              </span>
-            </button>
-          ))
+          loans.map((x) => {
+            const open = x.outstanding > 0;
+            const name = `${x.loan.lender} · ${x.loan.purpose}`;
+            return (
+              <ClickableCard
+                key={x.loan.id}
+                label={name}
+                onClick={() => setEdit({ kind: "loan", loan: x.loan })}
+              >
+                <VStack gap={3}>
+                  <HStack justify="between" vAlign="center" gap={4}>
+                    <Text weight="medium" maxLines={1}>
+                      {name}
+                    </Text>
+                    <Money value={x.outstanding} tone={open ? "neg" : "pos"} className="font-medium" />
+                  </HStack>
+                  <ProgressBar
+                    label={`${name} repaid`}
+                    isLabelHidden
+                    value={Math.min(1, Math.max(0, x.progress)) * 100}
+                    variant={open ? "accent" : "success"}
+                  />
+                  <HStack justify="between" vAlign="center" gap={4}>
+                    <Text type="supporting" hasTabularNumbers>
+                      {formatRs(x.repaid)} / {formatRs(x.loan.principal)}
+                    </Text>
+                    {open ? (
+                      x.payoff_month ? (
+                        <Text type="supporting" hasTabularNumbers>
+                          {formatRs(x.loan.installment)}/mo · {monthLabel(x.payoff_month)}
+                        </Text>
+                      ) : null
+                    ) : (
+                      <Badge label="Cleared" variant="success" />
+                    )}
+                  </HStack>
+                </VStack>
+              </ClickableCard>
+            );
+          })
         )}
-        <p className="text-sm text-fg-muted">
-          Tag a transfer as “Loan repayment” in Activity to count it here.
-        </p>
-      </Section>
+        <Text type="supporting">Tag transfers “Loan repayment” to count them.</Text>
+      </Block>
 
       <PlanSheets ds={ds} edit={edit} onClose={() => setEdit(null)} />
     </>
@@ -361,7 +381,7 @@ function MoneySection({ ds, now, onEditIncome }: { ds: Dataset; now: string; onE
   const step = 50_000; // Rs 500
   const suggested = alloc.suggested;
   return (
-    <Section
+    <Block
       title="This month's money"
       aside={
         <Button variant="text" size="sm" onClick={onEditIncome}>
@@ -369,73 +389,86 @@ function MoneySection({ ds, now, onEditIncome }: { ds: Dataset; now: string; onE
         </Button>
       }
     >
-      <div className={card} data-testid="allocation">
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col gap-1">
-            <span className="text-sm text-fg-muted">SadaPay</span>
-            <Money value={sada} className="text-xl font-medium" />
-          </div>
-          <div className="flex flex-col gap-1 text-right">
-            <span className="text-sm text-fg-muted">NayaPay</span>
-            <Money value={naya} className="text-xl font-medium" />
-          </div>
-        </div>
-        <Slider
-          label="SadaPay share"
-          value={sada}
-          onValueChange={(v) => setSada(Math.round(v / step) * step)}
-          min={0}
-          max={alloc.income}
-          step={step}
-        />
-        <div className="flex flex-col gap-1 text-sm">
-          <span className="flex justify-between gap-4">
-            <span>Suggested for SadaPay{alloc.source === "user" ? "" : " (in use)"}</span>
-            <Money value={suggested.sadapay} className="font-medium" />
-          </span>
-          <ul className="flex flex-col gap-1">
+      <Card>
+        <VStack gap={4} data-testid="allocation">
+          <HStack justify="between" gap={4}>
+            <VStack gap={1}>
+              <Text type="supporting">SadaPay</Text>
+              <Money value={sada} className="text-xl font-medium" />
+            </VStack>
+            <VStack gap={1} hAlign="end">
+              <Text type="supporting">NayaPay</Text>
+              <Money value={naya} className="text-xl font-medium" />
+            </VStack>
+          </HStack>
+          <Slider
+            label="SadaPay share"
+            value={sada}
+            onValueChange={(v) => setSada(Math.round(v / step) * step)}
+            min={0}
+            max={alloc.income}
+            step={step}
+          />
+          <List
+            edge="flush"
+            density="compact"
+            header={
+              <HStack justify="between" vAlign="center" gap={4}>
+                <HStack gap={2} vAlign="center">
+                  <Text weight="medium">Suggested</Text>
+                  {alloc.source === "user" ? null : <Badge label="In use" variant="teal" />}
+                </HStack>
+                <Money value={suggested.sadapay} className="font-medium" />
+              </HStack>
+            }
+          >
             {suggested.lines
               .filter((l) => l.account_id === "sadapay")
               .map((l) => (
-                <li key={l.label} className="flex justify-between gap-4 text-fg-muted">
-                  <span>{l.label}</span>
-                  <Money value={l.amount} />
-                </li>
+                <ListItem
+                  key={l.label}
+                  label={l.label}
+                  endContent={<Money value={l.amount} tone="muted" />}
+                />
               ))}
-          </ul>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {dirty ? (
-            <Button
-              variant="primary"
-              onClick={() => void enqueue("setSetting", { key: "allocation_sadapay", value: String(sada) })}
-            >
-              Save split
-            </Button>
+          </List>
+          {dirty || sada !== suggested.sadapay || alloc.source === "user" ? (
+            <HStack gap={2} wrap="wrap">
+              {dirty ? (
+                <Button
+                  variant="primary"
+                  onClick={() =>
+                    void enqueue("setSetting", { key: "allocation_sadapay", value: String(sada) })
+                  }
+                >
+                  Save split
+                </Button>
+              ) : null}
+              {sada !== suggested.sadapay ? (
+                <Button variant="ghost" onClick={() => setSada(suggested.sadapay)}>
+                  Use suggestion
+                </Button>
+              ) : null}
+              {alloc.source === "user" && !dirty ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => void enqueue("setSetting", { key: "allocation_sadapay", value: "" })}
+                >
+                  Auto-follow suggestion
+                </Button>
+              ) : null}
+            </HStack>
           ) : null}
-          {sada !== suggested.sadapay ? (
-            <Button variant="ghost" onClick={() => setSada(suggested.sadapay)}>
-              Use suggestion
-            </Button>
-          ) : null}
-          {alloc.source === "user" && !dirty ? (
-            <Button
-              variant="ghost"
-              onClick={() => void enqueue("setSetting", { key: "allocation_sadapay", value: "" })}
-            >
-              Follow the suggestion automatically
-            </Button>
-          ) : null}
-        </div>
-      </div>
-    </Section>
+        </VStack>
+      </Card>
+    </Block>
   );
 }
 
 function PlanSheets({ ds, edit, onClose }: { ds: Dataset; edit: Edit | null; onClose: () => void }) {
   const title =
     edit?.kind === "income"
-      ? "Monthly income into the wallets"
+      ? "Monthly income"
       : edit?.kind === "loan"
         ? edit.loan
           ? `${edit.loan.lender} · ${edit.loan.purpose}`
@@ -443,14 +476,14 @@ function PlanSheets({ ds, edit, onClose }: { ds: Dataset; edit: Edit | null; onC
         : edit?.kind === "goal"
           ? (edit.goal?.name ?? "New goal")
           : edit?.kind === "move"
-            ? `Move money for ${edit.goal.name}`
+            ? `Move money · ${edit.goal.name}`
             : edit?.kind === "fixed"
               ? (edit.recurring?.name ?? "Add a subscription or bill")
               : edit?.kind === "budget"
                 ? `${edit.category.name} budget`
                 : "";
   return (
-    <Sheet open={edit !== null} onOpenChange={(o) => !o && onClose()} title={title}>
+    <Sheet open={edit !== null} onOpenChange={(o) => !o && onClose()} title={title} purpose="form">
       {edit?.kind === "income" ? <IncomeForm ds={ds} onDone={onClose} /> : null}
       {edit?.kind === "loan" ? <LoanForm loan={edit.loan} onDone={onClose} /> : null}
       {edit?.kind === "goal" ? <GoalForm goal={edit.goal} count={ds.goals.length} onDone={onClose} /> : null}
@@ -484,6 +517,22 @@ function PlanSheets({ ds, edit, onClose }: { ds: Dataset; edit: Edit | null; onC
   );
 }
 
+/** A sheet form: stacked fields, submit handled once. */
+function Form({ onSubmit, children }: { onSubmit: () => void; children: ReactNode }) {
+  return (
+    <VStack
+      as="form"
+      gap={5}
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        onSubmit();
+      }}
+    >
+      {children}
+    </VStack>
+  );
+}
+
 function BudgetForm({
   category,
   average,
@@ -496,10 +545,8 @@ function BudgetForm({
   const [v, setV] = useState(rs(category.budget ?? undefined));
   const paisa = v.trim() === "" ? null : parseRs(v);
   return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e) => {
-        e.preventDefault();
+    <Form
+      onSubmit={() => {
         void enqueue("upsertCategory", {
           category_id: category.id,
           parent_id: category.parent_id,
@@ -514,17 +561,17 @@ function BudgetForm({
         onDone();
       }}
     >
-      <MoneyInput label="Budget" value={v} onChange={setV} autoFocus />
-      <p className="num text-sm text-fg-muted">
-        {average !== null
-          ? `Your average is ${formatRs(average)} a month.`
-          : "No history yet — a budget fills the gap."}{" "}
-        Leave it empty to plan with the average.
-      </p>
+      <MoneyInput
+        label="Budget"
+        value={v}
+        onChange={setV}
+        autoFocus
+        description={average !== null ? `Avg ${formatRs(average)} · empty = avg` : "Empty = use the average"}
+      />
       <Button type="submit" variant="primary" size="lg">
         {paisa ? `Budget ${formatRs(paisa)} a month` : "Use the average"}
       </Button>
-    </form>
+    </Form>
   );
 }
 
@@ -534,23 +581,24 @@ function IncomeForm({ ds, onDone }: { ds: Dataset; onDone: () => void }) {
   const [v, setV] = useState(rs(Number(setting(ds, "income_monthly"))));
   const paisa = parseRs(v);
   return (
-    <form
-      className="flex flex-col gap-6"
-      onSubmit={(e) => {
-        e.preventDefault();
+    <Form
+      onSubmit={() => {
         if (paisa === null) return;
         void enqueue("setSetting", { key: "income_monthly", value: String(paisa) });
         onDone();
       }}
     >
-      <MoneyInput label="Monthly income" value={v} onChange={setV} autoFocus />
-      <p className="text-sm text-fg-muted">
-        What reaches SadaPay and NayaPay from Meezan each month. Not counted as spending or income.
-      </p>
+      <MoneyInput
+        label="Monthly income"
+        value={v}
+        onChange={setV}
+        autoFocus
+        description="From Meezan into both wallets. Not counted as income."
+      />
       <Button type="submit" variant="primary" size="lg" disabled={paisa === null}>
         Save
       </Button>
-    </form>
+    </Form>
   );
 }
 
@@ -564,10 +612,8 @@ function LoanForm({ loan, onDone }: { loan: Loan | undefined; onDone: () => void
   const i = parseRs(installment);
   const ok = lender.trim() && purpose.trim() && p && i;
   return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e) => {
-        e.preventDefault();
+    <Form
+      onSubmit={() => {
         if (!ok || !p || !i) return;
         void enqueue("upsertLoan", {
           loan_id: loan?.id ?? newId(),
@@ -584,32 +630,28 @@ function LoanForm({ loan, onDone }: { loan: Loan | undefined; onDone: () => void
         onDone();
       }}
     >
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="From">
-          <Input value={lender} onChange={(e) => setLender(e.target.value)} />
-        </Field>
-        <Field label="For">
-          <Input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="Bicycle" />
-        </Field>
-      </div>
-      <Field label="Borrowed">
-        <MoneyInput label="Borrowed" value={principal} onChange={setPrincipal} />
-      </Field>
-      <Field label="Repay each month">
-        <MoneyInput label="Repay each month" value={installment} onChange={setInstallment} />
-      </Field>
+      <HStack gap={3}>
+        <StackItem size="fill">
+          <TextInput label="From" value={lender} onChange={setLender} width="100%" />
+        </StackItem>
+        <StackItem size="fill">
+          <TextInput label="For" value={purpose} onChange={setPurpose} placeholder="Bicycle" width="100%" />
+        </StackItem>
+      </HStack>
+      <MoneyInput label="Borrowed" value={principal} onChange={setPrincipal} />
+      <MoneyInput
+        label="Repay each month"
+        value={installment}
+        onChange={setInstallment}
+        {...(p && i ? { description: `${Math.ceil(p / i)} installments` } : {})}
+      />
       <Field label="Started">
         <Input type="date" value={started} onChange={(e) => setStarted(e.target.value)} />
       </Field>
-      {p && i ? (
-        <p className="num text-sm text-fg-muted">
-          {Math.ceil(p / i)} installments of {formatRs(i)}
-        </p>
-      ) : null}
       <Button type="submit" variant="primary" size="lg" disabled={!ok}>
         {loan ? "Save loan" : "Add loan"}
       </Button>
-    </form>
+    </Form>
   );
 }
 
@@ -620,10 +662,8 @@ function GoalForm({ goal, count, onDone }: { goal: Goal | undefined; count: numb
   const t = parseRs(target);
   const m = parseRs(monthly);
   return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e) => {
-        e.preventDefault();
+    <Form
+      onSubmit={() => {
         if (!name.trim() || !t || m === null) return;
         void enqueue("upsertGoal", {
           goal_id: goal?.id ?? newId(),
@@ -637,18 +677,14 @@ function GoalForm({ goal, count, onDone }: { goal: Goal | undefined; count: numb
         onDone();
       }}
     >
-      <Field label="Name">
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New laptop" />
-      </Field>
-      <Field label="Target">
-        <MoneyInput label="Target" value={target} onChange={setTarget} />
-      </Field>
-      <Field label="Set aside each month">
-        <MoneyInput label="Set aside each month" value={monthly} onChange={setMonthly} />
-      </Field>
-      {t && m ? (
-        <p className="num text-sm text-fg-muted">Reached in about {Math.ceil(t / m)} months</p>
-      ) : null}
+      <TextInput label="Name" value={name} onChange={setName} placeholder="New laptop" width="100%" />
+      <MoneyInput label="Target" value={target} onChange={setTarget} />
+      <MoneyInput
+        label="Set aside each month"
+        value={monthly}
+        onChange={setMonthly}
+        {...(t && m ? { description: `About ${Math.ceil(t / m)} months` } : {})}
+      />
       <Button type="submit" variant="primary" size="lg" disabled={!name.trim() || !t || m === null}>
         {goal ? "Save goal" : "Add goal"}
       </Button>
@@ -663,7 +699,7 @@ function GoalForm({ goal, count, onDone }: { goal: Goal | undefined; count: numb
           Delete goal
         </Button>
       ) : null}
-    </form>
+    </Form>
   );
 }
 
@@ -672,10 +708,8 @@ function MoveForm({ goal, onDone }: { goal: Goal; onDone: () => void }) {
   const [amount, setAmount] = useState(rs(goal.monthly));
   const a = parseRs(amount);
   return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e) => {
-        e.preventDefault();
+    <Form
+      onSubmit={() => {
         if (!a) return;
         void enqueue("moveGoal", {
           move_id: newId(),
@@ -696,13 +730,16 @@ function MoveForm({ goal, onDone }: { goal: Goal; onDone: () => void }) {
           { value: "out", label: "Release" },
         ]}
       />
-      <MoneyInput label="Amount" value={amount} onChange={setAmount} autoFocus />
-      <p className="text-sm text-fg-muted">
-        The money stays in SadaPay; this only changes what's reserved for {goal.name}.
-      </p>
+      <MoneyInput
+        label="Amount"
+        value={amount}
+        onChange={setAmount}
+        autoFocus
+        description="Stays in SadaPay"
+      />
       <Button type="submit" variant="primary" size="lg" disabled={!a}>
         {dir === "in" ? `Set aside ${a ? formatRs(a) : ""}` : `Release ${a ? formatRs(a) : ""}`}
       </Button>
-    </form>
+    </Form>
   );
 }

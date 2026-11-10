@@ -1,66 +1,94 @@
+import { HStack } from "@astryxdesign/core/HStack";
+import { StackItem } from "@astryxdesign/core/Stack";
+import { Text } from "@astryxdesign/core/Text";
+import { ToastViewport, useToast } from "@astryxdesign/core/Toast";
+import { VStack } from "@astryxdesign/core/VStack";
 import { CircleAlert, CircleCheck, Info, TriangleAlert, X } from "lucide-react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { cn } from "../lib/cn.ts";
+import { useEffect, useRef } from "react";
 import { useStore } from "../lib/store.ts";
-import { dismissToast, toasts } from "../lib/toast.ts";
+import { dismissToast, type Toast, toasts } from "../lib/toast.ts";
+import { Button } from "./ui/button.tsx";
 
 const ICON = { neutral: Info, error: CircleAlert, warn: TriangleAlert, success: CircleCheck } as const;
-const TONE = { neutral: "text-fg-muted", error: "text-neg", warn: "text-warn", success: "text-pos" } as const;
+const TONE = { neutral: undefined, error: "text-neg", warn: "text-warn", success: "text-pos" } as const;
 
-/** Inline messages above the tab bar: what happened and what to do. */
+/**
+ * Toasts above the tab bar. Astryx's ToastViewport is a `popover="manual"` in the top layer and moves into
+ * the open modal Sheet (Dialog/BottomSheet use showModal), so toasts stay above it and tappable instead of inert.
+ * The app's toast store owns timing; this mirrors it into the viewport.
+ */
 export function Toaster() {
-  const list = useStore(toasts);
-  const reduce = useReducedMotion();
   return (
-    <section
-      aria-live="polite"
-      aria-label="Notifications"
-      data-toaster
-      className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--tabbar-h)+env(safe-area-inset-bottom)+var(--spacing)*3)] z-[60] flex flex-col items-center gap-2 px-4 lg:bottom-6"
-    >
-      <AnimatePresence initial={false}>
-        {list.map((t) => {
-          const Icon = ICON[t.tone];
-          return (
-            <motion.div
-              key={t.id}
-              layout={!reduce}
-              initial={reduce ? false : { opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
-              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              className="pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-card bg-surface p-4 shadow-float"
-              role={t.tone === "error" ? "alert" : "status"}
+    <ToastViewport position="bottomEnd" inset={{ bottom: 80 }} maxVisible={3}>
+      <ToastBridge />
+    </ToastViewport>
+  );
+}
+
+function ToastBridge() {
+  const list = useStore(toasts);
+  const show = useToast();
+  const shown = useRef(new Map<number, () => void>());
+  useEffect(() => {
+    const live = new Set(list.map((t) => t.id));
+    for (const [id, hide] of shown.current)
+      if (!live.has(id)) {
+        shown.current.delete(id);
+        hide();
+      }
+    for (const t of list) {
+      if (shown.current.has(t.id)) continue;
+      shown.current.set(
+        t.id,
+        show({
+          body: t.title,
+          type: t.tone === "error" ? "error" : "info",
+          isAutoHide: false,
+          uniqueID: `toast-${t.id}`,
+          onHide: () => {
+            shown.current.delete(t.id);
+            dismissToast(t.id);
+          },
+          renderContent: ({ dismiss }) => <ToastBody t={t} dismiss={dismiss} />,
+        }),
+      );
+    }
+  }, [list, show]);
+  return null;
+}
+
+function ToastBody({ t, dismiss }: { t: Toast; dismiss: () => void }) {
+  const Icon = ICON[t.tone];
+  return (
+    <HStack gap={3} vAlign="start">
+      <Icon className={TONE[t.tone]} aria-hidden />
+      <StackItem size="fill">
+        <VStack gap={1} hAlign="start">
+          <Text weight="medium" color="inherit">
+            {t.title}
+          </Text>
+          {t.detail ? (
+            <Text type="supporting" color="inherit">
+              {t.detail}
+            </Text>
+          ) : null}
+          {t.action ? (
+            <Button
+              variant="text"
+              size="sm"
+              onClick={() => {
+                t.action?.run();
+                dismiss();
+              }}
             >
-              <Icon className={cn("mt-px shrink-0", TONE[t.tone])} aria-hidden />
-              <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <p className="font-medium">{t.title}</p>
-                {t.detail ? <p className="text-sm text-fg-muted">{t.detail}</p> : null}
-                {t.action ? (
-                  <button
-                    type="button"
-                    className="self-start text-sm font-medium text-fg underline underline-offset-4"
-                    onClick={() => {
-                      t.action?.run();
-                      dismissToast(t.id);
-                    }}
-                  >
-                    {t.action.label}
-                  </button>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                aria-label="Dismiss"
-                className="-m-2 grid size-10 shrink-0 place-items-center rounded-full text-fg-muted"
-                onClick={() => dismissToast(t.id)}
-              >
-                <X aria-hidden />
-              </button>
-            </motion.div>
-          );
-        })}
-      </AnimatePresence>
-    </section>
+              {t.action.label}
+            </Button>
+          ) : null}
+        </VStack>
+      </StackItem>
+      <Button variant="ghost" size="icon" label="Dismiss" onClick={dismiss}>
+        <X aria-hidden />
+      </Button>
+    </HStack>
   );
 }

@@ -1,8 +1,12 @@
-import { useState } from "react";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Heading } from "@astryxdesign/core/Heading";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
+import { type FormEvent, useState } from "react";
 import { Wordmark } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
-import { Field, Input } from "../components/ui/input.tsx";
 import { auth } from "../lib/auth.ts";
+import { opt } from "../lib/opt.ts";
 import { defaultDeviceName } from "../lib/platform.ts";
 
 export function LoginScreen() {
@@ -11,14 +15,15 @@ export function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   return (
-    <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center gap-8 px-safe pt-safe pb-safe">
-      <div className="flex flex-col gap-4">
+    <VStack as="main" gap={8} vAlign="center" className="mx-auto min-h-dvh max-w-sm px-safe pt-safe pb-safe">
+      <VStack gap={4}>
         <Wordmark />
-        <h1 className="font-display text-headline font-medium">Sign in to your ledger</h1>
-      </div>
-      <form
-        className="flex flex-col gap-4"
-        onSubmit={async (e) => {
+        <Heading level={1}>Sign in</Heading>
+      </VStack>
+      <VStack
+        as="form"
+        gap={4}
+        onSubmit={async (e: FormEvent) => {
           e.preventDefault();
           setBusy(true);
           setError(null);
@@ -27,7 +32,7 @@ export function LoginScreen() {
           } catch (err) {
             setError(
               err instanceof TypeError
-                ? "Can't reach the server. Check your connection and try again."
+                ? "Can't reach the server."
                 : err instanceof Error
                   ? err.message
                   : String(err),
@@ -37,29 +42,36 @@ export function LoginScreen() {
           }
         }}
       >
-        <Field label="Passcode">
-          <Input
-            type="password"
-            inputMode="numeric"
-            autoComplete="current-password"
-            value={passcode}
-            onChange={(e) => setPasscode(e.target.value)}
-            autoFocus
-            aria-invalid={error ? true : undefined}
-          />
-        </Field>
-        <Field label="This device">
-          <Input value={device} onChange={(e) => setDevice(e.target.value)} maxLength={60} />
-        </Field>
-        {error ? (
-          <p className="text-sm text-neg" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <Button type="submit" variant="primary" size="lg" loading={busy} disabled={passcode.length < 4}>
+        <TextInput
+          label="Passcode"
+          type="password"
+          inputMode="numeric"
+          autoComplete="current-password"
+          value={passcode}
+          onChange={setPasscode}
+          hasAutoFocus
+          size="lg"
+          width="100%"
+          {...opt({ status: error ? { type: "error" as const } : undefined })}
+        />
+        <TextInput
+          label="This device"
+          value={device}
+          onChange={(v) => setDevice(v.slice(0, 60))}
+          width="100%"
+        />
+        {error ? <Banner status="error" title={error} role="alert" /> : null}
+        <Button
+          type="submit"
+          variant="primary"
+          size="lg"
+          width="full"
+          loading={busy}
+          disabled={passcode.length < 4}
+        >
           Sign in
         </Button>
-      </form>
-    </main>
+      </VStack>
+    </VStack>
   );
 }

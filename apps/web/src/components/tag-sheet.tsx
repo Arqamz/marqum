@@ -1,3 +1,9 @@
+import { Banner } from "@astryxdesign/core/Banner";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Selector } from "@astryxdesign/core/Selector";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import {
   classify,
   type Dataset,
@@ -10,18 +16,17 @@ import {
   rememberRule,
 } from "@marqum/core";
 import type { Flow, Transaction } from "@marqum/schema";
-import { Lock } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { enqueue, newId } from "../lib/commands.ts";
 import { monthName } from "../lib/months.ts";
-import { kindFor } from "../lib/recurring.ts";
+import { activeSubscriptions, kindFor } from "../lib/recurring.ts";
 import { stepUp } from "../lib/stepup.ts";
 import { escapeRegex, FLOW_LABEL, IN_FLOWS, lookup, OUT_FLOWS, timeOf, txnTitle } from "../lib/view.ts";
 import { CategoryPicker } from "./category-picker.tsx";
 import { useDataset } from "./dataset-provider.tsx";
 import { Button } from "./ui/button.tsx";
 import { Chip, Segmented, Switch } from "./ui/controls.tsx";
-import { Field, Input, MoneyInput } from "./ui/input.tsx";
+import { MoneyInput } from "./ui/input.tsx";
 import { Sheet } from "./ui/sheet.tsx";
 
 /** Tag a transaction: reason (suggests a category as you type), category, flow, links, "always". */
@@ -29,6 +34,7 @@ export function TagSheet({ txn, onClose }: { txn: Transaction | null; onClose: (
   const ds = useDataset();
   return (
     <Sheet
+      purpose="form"
       open={txn !== null}
       onOpenChange={(o) => !o && onClose()}
       title={
@@ -53,6 +59,11 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
   const [loanId, setLoanId] = useState<string | null>(txn.loan_id);
   const [linked, setLinked] = useState<string | null>(txn.linked_txn_id);
   const [remember, setRemember] = useState(false);
+  const [counterparty, setCounterparty] = useState<string | null>(txn.counterparty_id);
+  const subscriptions = activeSubscriptions(ds);
+  const pickedSub = subscriptions.find(
+    (r) => r.category_id === category && (r.counterparty_id === null || r.counterparty_id === counterparty),
+  );
   const [saving, setSaving] = useState(false);
   const closed = isClosed(ds, monthOf(txn.occurred_at));
   const backing = ds.recurring.find((r) => r.source_txn_id === txn.id && r.active);
@@ -134,6 +145,7 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
         txn_id: txn.id,
         reason: reason.trim() || null,
         category_id: showCategory ? category : null,
+        ...(counterparty !== txn.counterparty_id ? { counterparty_id: counterparty } : {}),
         ...(closed
           ? {}
           : {
@@ -150,46 +162,70 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
   }
 
   return (
-    <form
-      className="flex flex-col gap-6"
+    <VStack
+      as="form"
+      gap={5}
       onSubmit={(e) => {
         e.preventDefault();
         void save();
       }}
     >
       {closed ? (
-        <p className="flex items-center gap-2 rounded-control bg-surface-2 px-4 py-3 text-sm text-fg-muted">
-          <Lock className="shrink-0" aria-hidden />
-          {monthName(monthOf(txn.occurred_at))} is closed — saving asks for your fingerprint.
-        </p>
+        <Banner
+          status="info"
+          title={`${monthName(monthOf(txn.occurred_at))} is closed`}
+          description="Saving asks for your fingerprint."
+        />
       ) : null}
       {txn.source === "notification" && txn.status !== "verified" ? (
-        <p className="-mt-2 text-sm text-warn" data-testid="from-notification">
-          From notification · amount may change (fees/tax)
-        </p>
+        <Text type="supporting" data-testid="from-notification">
+          From notification · amount may change
+        </Text>
       ) : null}
       {txn.description ? (
-        <p className="-mt-2 font-mono text-sm break-words text-fg-muted">{txn.description}</p>
+        <Text type="code" color="secondary" wordBreak="break-word">
+          {txn.description}
+        </Text>
       ) : null}
 
-      <Field label="Reason">
-        <Input
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="What was it for?"
-          aria-label="Reason"
-          enterKeyHint="done"
-        />
-      </Field>
+      <TextInput
+        label="Reason"
+        value={reason}
+        onChange={setReason}
+        placeholder="What was it for?"
+        enterKeyHint="done"
+      />
 
       {!closed ? (
-        <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Kind">
+        <HStack gap={2} wrap="wrap" role="radiogroup" aria-label="Kind">
           {flows.map((f) => (
             <Chip key={f} selected={flow === f} onClick={() => setFlow(f)}>
               {FLOW_LABEL[f]}
             </Chip>
           ))}
-        </div>
+        </HStack>
+      ) : null}
+
+      {showCategory && txn.amount < 0 && subscriptions.length > 0 ? (
+        <VStack gap={2} data-testid="subscription-pick">
+          <Text type="label">Subscription</Text>
+          <HStack gap={2} wrap="wrap">
+            {subscriptions.map((r) => (
+              <Chip
+                key={r.id}
+                selected={pickedSub?.id === r.id}
+                onClick={() => {
+                  setPicked(true);
+                  setCategory(r.category_id);
+                  if (r.counterparty_id) setCounterparty(r.counterparty_id);
+                  if (!reason.trim()) setReason(r.name);
+                }}
+              >
+                {r.name}
+              </Chip>
+            ))}
+          </HStack>
+        </VStack>
       ) : null}
 
       {showCategory ? (
@@ -205,47 +241,45 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
       ) : null}
 
       {!closed && (flow === "loan_repay" || flow === "loan_in") ? (
-        <Field label={flow === "loan_repay" ? "Repays" : "Loan"}>
-          <select
-            className="h-12 rounded-control border border-border bg-surface px-4"
-            value={loanId ?? ""}
-            onChange={(e) => setLoanId(e.target.value || null)}
-          >
-            <option value="">Not linked</option>
-            {loans.map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.lender} · {x.purpose} · {formatRs(x.principal)}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <Selector
+          label={flow === "loan_repay" ? "Repays" : "Loan"}
+          value={loanId ?? ""}
+          onChange={(v) => setLoanId(v || null)}
+          presentation="adaptive"
+          width="100%"
+          options={[
+            { value: "", label: "Not linked" },
+            ...loans.map((x) => ({
+              value: x.id,
+              label: `${x.lender} · ${x.purpose} · ${formatRs(x.principal)}`,
+            })),
+          ]}
+        />
       ) : null}
 
       {!closed && flow === "reimbursement" ? (
-        <Field label="Pays back">
-          <select
-            className="h-12 rounded-control border border-border bg-surface px-4"
-            value={linked ?? ""}
-            onChange={(e) => setLinked(e.target.value || null)}
-          >
-            <option value="">Not linked</option>
-            {candidates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {formatRs(t.amount)} · {txnTitle(t, l)} · {dayLabel(t.occurred_at.slice(0, 10))}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <Selector
+          label="Pays back"
+          value={linked ?? ""}
+          onChange={(v) => setLinked(v || null)}
+          presentation="adaptive"
+          width="100%"
+          options={[
+            { value: "", label: "Not linked" },
+            ...candidates.map((t) => ({
+              value: t.id,
+              label: `${formatRs(t.amount)} · ${txnTitle(t, l)} · ${dayLabel(t.occurred_at.slice(0, 10))}`,
+            })),
+          ]}
+        />
       ) : null}
 
       {txn.amount < 0 && (flow === "spend" || flow === "fee") ? (
-        <div className="flex flex-col gap-2" data-testid="repeats">
-          <span className="text-sm text-fg-muted">
+        <VStack gap={2} data-testid="repeats">
+          <Text type="label">
             Repeats
-            {backing
-              ? ` — tracked as a ${backing.cadence} ${backing.kind === "other" ? "charge" : backing.kind}`
-              : ""}
-          </span>
+            {backing ? ` · tracked ${backing.cadence}` : ""}
+          </Text>
           <Segmented
             label="Repeats"
             value={repeats}
@@ -257,41 +291,34 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
             ]}
           />
           {repeats !== "no" ? (
-            <div className="flex flex-col gap-1">
-              <MoneyInput label="Expected amount" value={repeatAmount} onChange={setRepeatAmount} />
-              <span className="text-sm text-fg-muted">
-                Expected{" "}
-                {repeats === "yearly"
-                  ? `every ${monthLabel(monthOf(txn.occurred_at)).slice(0, 3)}`
-                  : "every month"}{" "}
-                on day {Number(txn.occurred_at.slice(8, 10))}
-              </span>
-            </div>
+            <MoneyInput
+              label="Expected amount"
+              value={repeatAmount}
+              onChange={setRepeatAmount}
+              description={`${repeats === "yearly" ? `Every ${monthLabel(monthOf(txn.occurred_at)).slice(0, 3)}` : "Every month"} · day ${Number(txn.occurred_at.slice(8, 10))}`}
+            />
           ) : null}
-        </div>
+        </VStack>
       ) : null}
 
       {!closed && pattern ? (
-        <div className="flex items-center justify-between gap-4">
-          <label htmlFor="remember-rule" className="min-w-0 text-sm">
-            Always tag <span className="font-medium">{rule?.label}</span> like this
-          </label>
-          <Switch
-            id="remember-rule"
-            checked={remember}
-            onCheckedChange={setRemember}
-            label="Always tag like this"
-          />
-        </div>
+        <Switch
+          id="remember-rule"
+          checked={remember}
+          onCheckedChange={setRemember}
+          label="Always tag like this"
+          text={`Always tag ${rule?.label ?? ""} like this`}
+        />
       ) : null}
 
-      <div className="flex flex-col gap-2">
-        <Button type="submit" variant="primary" size="lg" loading={saving}>
+      <VStack gap={2}>
+        <Button type="submit" variant="primary" size="lg" loading={saving} width="full">
           Save
         </Button>
         {txn.status !== "verified" ? (
           <Button
             variant="danger"
+            width="full"
             onClick={() => {
               void enqueue("deleteProvisional", { txn_id: txn.id });
               onDone();
@@ -300,7 +327,7 @@ function TagForm({ ds, txn, onDone }: { ds: Dataset; txn: Transaction; onDone: (
             Delete this unverified row
           </Button>
         ) : null}
-      </div>
-    </form>
+      </VStack>
+    </VStack>
   );
 }

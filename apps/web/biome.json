@@ -2,5 +2,17 @@
   "$schema": "../../node_modules/@biomejs/biome/configuration_schema.json",
   "root": false,
   "extends": "//",
+  "files": {
+    "includes": [
+      "**",
+      "!AGENTS.md",
+      "!GEMINI.md",
+      "!src/astryx-themes.ts",
+      "!src/themes/*/*.css",
+      "!src/themes/*/*.js",
+      "!src/themes/*/*.d.ts",
+      "!src/themes/*/*.doc.mjs"
+    ]
+  },
   "css": { "parser": { "tailwindDirectives": true } }
 }

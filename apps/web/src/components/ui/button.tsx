@@ -1,44 +1,97 @@
-import { cva, type VariantProps } from "class-variance-authority";
-import { LoaderCircle } from "lucide-react";
-import type { ButtonHTMLAttributes } from "react";
-import { cn } from "../../lib/cn.ts";
+import { Button as AButton } from "@astryxdesign/core/Button";
+import { IconButton } from "@astryxdesign/core/IconButton";
+import { Children, isValidElement, type MouseEvent, type ReactNode } from "react";
+import { opt } from "../../lib/opt.ts";
 
-const button = cva(
-  "inline-flex select-none items-center justify-center gap-2 whitespace-nowrap font-medium transition-[background-color,color,opacity,transform] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50",
-  {
-    variants: {
-      variant: {
-        primary: "bg-accent text-accent-fg hover:opacity-90",
-        secondary: "bg-surface-2 text-fg hover:bg-surface-3",
-        ghost: "text-fg hover:bg-surface-2",
-        text: "text-fg underline decoration-border-strong underline-offset-4 hover:decoration-fg",
-        danger: "text-fg-muted hover:bg-surface-2 hover:text-fg",
-      },
-      size: {
-        lg: "h-12 rounded-control px-5 text-base",
-        md: "h-10 rounded-control px-4 text-sm",
-        sm: "h-8 rounded-inner px-3 text-sm",
-        icon: "size-10 rounded-full",
-      },
-    },
-    defaultVariants: { variant: "secondary", size: "md" },
-  },
-);
+type Variant = "primary" | "secondary" | "ghost" | "text" | "danger";
+type Size = "lg" | "md" | "sm" | "icon";
 
-export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof button> {
+export interface ButtonProps {
+  variant?: Variant;
+  size?: Size;
   loading?: boolean;
+  disabled?: boolean;
+  type?: "button" | "submit" | "reset";
+  onClick?: (e: MouseEvent) => void;
+  /** Accessible name. Defaults to the text of `children`. */
+  label?: string;
+  icon?: ReactNode;
+  /** stretch to the row ("full") */
+  width?: "full";
+  className?: string;
+  children?: ReactNode;
+  "aria-label"?: string;
+  "data-testid"?: string;
 }
 
-export function Button({ className, variant, size, loading, children, disabled, ...props }: ButtonProps) {
+const VARIANT = {
+  primary: "primary",
+  secondary: "secondary",
+  ghost: "ghost",
+  text: "ghost",
+  danger: "destructive",
+} as const;
+
+/** Plain text of a node tree, for the accessible label Astryx requires. */
+export function textOf(node: ReactNode): string {
+  let out = "";
+  Children.forEach(node, (c) => {
+    if (typeof c === "string" || typeof c === "number") out += String(c);
+    else if (isValidElement<{ children?: ReactNode }>(c)) out += textOf(c.props.children);
+  });
+  return out.replace(/\s+/g, " ").trim();
+}
+
+/** Astryx Button with the app's variant names. `size="icon"` is an IconButton (pass the icon as children). */
+export function Button({
+  variant = "secondary",
+  size = "md",
+  loading,
+  disabled,
+  type = "button",
+  onClick,
+  label,
+  icon,
+  width,
+  className,
+  children,
+  ...rest
+}: ButtonProps) {
+  const name = label ?? rest["aria-label"] ?? textOf(children);
+  if (size === "icon") {
+    return (
+      <IconButton
+        label={name}
+        icon={icon ?? children}
+        variant={VARIANT[variant]}
+        type={type}
+        {...opt({
+          isLoading: loading,
+          isDisabled: disabled,
+          onClick,
+          className,
+          "data-testid": rest["data-testid"],
+        })}
+      />
+    );
+  }
   return (
-    <button
-      type="button"
-      className={cn(button({ variant, size }), variant === "text" && "h-auto px-0", className)}
-      disabled={disabled || loading}
-      {...props}
+    <AButton
+      label={name}
+      variant={VARIANT[variant]}
+      size={size}
+      type={type}
+      {...opt({
+        icon,
+        isLoading: loading,
+        isDisabled: disabled,
+        onClick,
+        width: width === "full" ? "100%" : undefined,
+        className,
+        "data-testid": rest["data-testid"],
+      })}
     >
-      {loading ? <LoaderCircle className="animate-spin" aria-hidden /> : null}
       {children}
-    </button>
+    </AButton>
   );
 }

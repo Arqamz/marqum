@@ -1,28 +1,42 @@
-import { RadioGroup, Slider as RSlider, Switch as RSwitch } from "radix-ui";
+import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
+import { Skeleton as ASkeleton } from "@astryxdesign/core/Skeleton";
+import { Slider as ASlider } from "@astryxdesign/core/Slider";
+import { Switch as ASwitch } from "@astryxdesign/core/Switch";
+import { ToggleButton } from "@astryxdesign/core/ToggleButton";
 import type { ReactNode } from "react";
-import { cn } from "../../lib/cn.ts";
+import { opt } from "../../lib/opt.ts";
+import { textOf } from "./button.tsx";
 
+/**
+ * Astryx Switch. With `text` the label is shown, spread across the row (switch at the end);
+ * without it the label is only for screen readers.
+ */
 export function Switch({
   checked,
   onCheckedChange,
   label,
+  text,
+  description,
   id,
 }: {
   checked: boolean;
   onCheckedChange: (v: boolean) => void;
   label: string;
+  text?: string;
+  description?: string;
   id?: string;
 }) {
   return (
-    <RSwitch.Root
-      id={id}
+    <ASwitch
+      label={text ?? label}
       aria-label={label}
-      checked={checked}
-      onCheckedChange={onCheckedChange}
-      className="relative h-7 w-12 shrink-0 rounded-full bg-surface-3 transition-colors data-[state=checked]:bg-accent"
-    >
-      <RSwitch.Thumb className="block size-5 translate-x-1 rounded-full bg-surface transition-transform data-[state=checked]:translate-x-6" />
-    </RSwitch.Root>
+      isLabelHidden={text === undefined}
+      value={checked}
+      onChange={(v) => onCheckedChange(v)}
+      labelPosition="start"
+      labelSpacing={text === undefined ? "hug" : "spread"}
+      {...opt({ id, description, width: text === undefined ? undefined : "100%" })}
+    />
   );
 }
 
@@ -34,6 +48,7 @@ export function Slider({
   step = 1,
   label,
   centered,
+  format,
 }: {
   value: number;
   onValueChange: (v: number) => void;
@@ -41,98 +56,94 @@ export function Slider({
   max: number;
   step?: number;
   label: string;
-  /** two-sided (−/+) values: no fill from the left, a tick at zero instead */
+  /** two-sided (−/+) values: a mark at zero */
   centered?: boolean;
+  format?: (v: number) => string;
 }) {
   return (
-    <RSlider.Root
-      value={[value]}
-      onValueChange={(v) => onValueChange(v[0] ?? value)}
+    <ASlider
+      label={label}
+      isLabelHidden
+      value={value}
+      onChange={(v: number) => onValueChange(v)}
       min={min}
       max={max}
       step={step}
-      className="relative flex h-8 w-full touch-none items-center select-none"
-    >
-      <RSlider.Track className="relative h-1 grow rounded-full bg-surface-3">
-        {centered ? (
-          <span className="absolute top-1/2 left-1/2 h-3 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-border-strong" />
-        ) : (
-          <RSlider.Range className="absolute h-full rounded-full bg-accent" />
-        )}
-      </RSlider.Track>
-      <RSlider.Thumb
-        aria-label={label}
-        className="block size-6 rounded-full border-2 border-accent bg-surface"
-      />
-    </RSlider.Root>
+      {...opt({ formatValue: format, marks: centered ? [{ value: 0 }] : undefined })}
+      width="100%"
+    />
   );
 }
 
-/** Segmented control (single choice). Selection is the accent. */
+/** Single choice; fills the row. */
 export function Segmented<T extends string>({
   value,
   onValueChange,
   options,
   label,
-  className,
+  size = "md",
 }: {
   value: T;
   onValueChange: (v: T) => void;
-  options: { value: T; label: ReactNode }[];
+  options: { value: T; label: string; icon?: ReactNode }[];
   label: string;
+  size?: "sm" | "md" | "lg";
   className?: string;
 }) {
   return (
-    <RadioGroup.Root
-      aria-label={label}
+    <SegmentedControl
+      label={label}
       value={value}
-      onValueChange={(v) => onValueChange(v as T)}
-      className={cn("flex gap-1 rounded-control bg-surface-2 p-1", className)}
-      orientation="horizontal"
+      onChange={(v) => onValueChange(v as T)}
+      layout="fill"
+      size={size}
     >
       {options.map((o) => (
-        <RadioGroup.Item
-          key={o.value}
-          value={o.value}
-          className="h-8 flex-1 rounded-inner px-3 text-sm font-medium text-fg-muted transition-colors data-[state=checked]:bg-accent data-[state=checked]:text-accent-fg"
-        >
-          {o.label}
-        </RadioGroup.Item>
+        <SegmentedControlItem key={o.value} value={o.value} label={o.label} {...opt({ icon: o.icon })} />
       ))}
-    </RadioGroup.Root>
+    </SegmentedControl>
   );
 }
 
-/** Filter chip: toggles; current selection uses the accent. */
+/** Filter chip: a small toggle button. */
 export function Chip({
   selected,
   onClick,
   children,
-  className,
+  label,
+  icon,
+  "data-testid": testId,
 }: {
   selected?: boolean;
   onClick?: () => void;
   children: ReactNode;
+  label?: string;
+  icon?: ReactNode;
   className?: string;
+  "data-testid"?: string;
 }) {
   return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={onClick}
-      className={cn(
-        "inline-flex h-8 shrink-0 items-center gap-1 rounded-full border px-3 text-sm whitespace-nowrap transition-colors",
-        selected
-          ? "border-accent bg-accent text-accent-fg"
-          : "border-border bg-surface text-fg-muted hover:text-fg",
-        className,
-      )}
+    <ToggleButton
+      size="sm"
+      label={label ?? textOf(children)}
+      isPressed={Boolean(selected)}
+      onPressedChange={() => onClick?.()}
+      {...opt({ icon, "data-testid": testId })}
     >
       {children}
-    </button>
+    </ToggleButton>
   );
 }
 
-export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("skeleton rounded-inner", className)} aria-hidden />;
+export function Skeleton({
+  width,
+  height = 16,
+  index,
+}: {
+  width?: number | string;
+  height?: number | string;
+  index?: number;
+  className?: string;
+}) {
+  return <ASkeleton height={height} {...opt({ width, index })} />;
 }

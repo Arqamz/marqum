@@ -1,3 +1,8 @@
+import { Banner } from "@astryxdesign/core/Banner";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { Link, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowLeftRight, CalendarCheck, House, Settings, Target } from "lucide-react";
 import type { ReactNode } from "react";
@@ -5,6 +10,7 @@ import { cn } from "../lib/cn.ts";
 import { useStore } from "../lib/store.ts";
 import { availableUpdate } from "../lib/updates.ts";
 import { SyncDot } from "./sync-dot.tsx";
+import { Button } from "./ui/button.tsx";
 
 const NAV = [
   { to: "/", label: "Home", icon: House },
@@ -45,7 +51,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
               key={to}
               to={to}
               activeOptions={{ exact: to === "/" }}
-              className="flex h-10 items-center gap-3 rounded-control px-3 text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg data-[status=active]:bg-accent-soft data-[status=active]:font-medium data-[status=active]:text-fg"
+              className="flex h-10 items-center gap-3 rounded-control px-3 text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg data-[status=active]:bg-accent-soft data-[status=active]:font-semibold data-[status=active]:text-accent-text"
             >
               <Icon aria-hidden />
               {label}
@@ -64,9 +70,11 @@ export function AppFrame({ children }: { children: ReactNode }) {
               key={to}
               to={to}
               activeOptions={{ exact: to === "/" }}
-              className="flex flex-col items-center justify-center gap-1 text-xs text-fg-subtle data-[status=active]:font-medium data-[status=active]:text-fg"
+              className="group flex flex-col items-center justify-center gap-1 text-xs text-fg-subtle data-[status=active]:font-semibold data-[status=active]:text-accent-text"
             >
-              <Icon aria-hidden />
+              <span className="grid h-7 w-14 place-items-center rounded-full transition-colors group-data-[status=active]:bg-accent-soft">
+                <Icon aria-hidden />
+              </span>
               {label}
             </Link>
           ))}
@@ -102,34 +110,31 @@ export function Screen({
           )}
         >
           {back ? (
-            <button
-              type="button"
-              onClick={() => router.history.back()}
-              aria-label="Back"
-              className="-ml-2 grid size-10 place-items-center rounded-full hover:bg-surface-2"
-            >
+            <Button size="icon" variant="ghost" label="Back" onClick={() => router.history.back()}>
               <ArrowLeft aria-hidden />
-            </button>
+            </Button>
           ) : (
             <Wordmark className="lg:hidden" />
           )}
-          {title ? <span className="min-w-0 truncate font-medium">{title}</span> : null}
-          <div className="ml-auto flex items-center gap-1">
+          {title ? (
+            <Text type="large" weight="semibold" maxLines={1}>
+              {title}
+            </Text>
+          ) : null}
+          <HStack gap={1} vAlign="center" className="ml-auto">
             {actions}
             <SyncDot />
-          </div>
+          </HStack>
         </div>
       </header>
       <main
         className={cn(
-          "mx-auto flex flex-col gap-8 px-safe pt-2 pb-[calc(var(--tabbar-h)+env(safe-area-inset-bottom)+var(--spacing)*8)] lg:pb-12",
+          "mx-auto flex flex-col gap-8 px-safe pt-2 pb-[calc(var(--tabbar-h)+env(safe-area-inset-bottom)+2rem)] lg:pb-12",
           wide ? "max-w-5xl" : "max-w-[var(--content-max)]",
         )}
       >
         {update ? (
-          <p className="rounded-control bg-surface-2 px-4 py-3 text-sm text-fg-muted">
-            Marqūm {update} is available — update in Obtainium
-          </p>
+          <Banner status="info" title={`Marqūm ${update} is out`} description="Update in Obtainium" />
         ) : null}
         {children}
       </main>
@@ -137,7 +142,7 @@ export function Screen({
   );
 }
 
-/** A group of related content: tight inside (8), headline above. */
+/** A group of related content: heading (and an action) above, tight inside. */
 export function Section({
   title,
   aside,
@@ -150,23 +155,31 @@ export function Section({
   className?: string;
 }) {
   return (
-    <section className={cn("flex flex-col gap-3", className)}>
+    <VStack as="section" gap={3} {...(className ? { className } : {})}>
       {title || aside ? (
-        <div className="flex items-baseline justify-between gap-4">
-          {title ? <h2 className="font-medium text-balance">{title}</h2> : <span />}
+        <HStack justify="between" vAlign="center" gap={4}>
+          {title ? (
+            <Heading level={2} textWrap="balance">
+              {title}
+            </Heading>
+          ) : (
+            <span />
+          )}
           {aside}
-        </div>
+        </HStack>
       ) : null}
       {children}
-    </section>
+    </VStack>
   );
 }
 
 export function Headline({ children, sub }: { children: ReactNode; sub?: ReactNode }) {
   return (
-    <div className="flex flex-col gap-2">
-      <h1 className="font-display text-headline font-medium text-balance">{children}</h1>
-      {sub ? <p className="text-fg-muted">{sub}</p> : null}
-    </div>
+    <VStack gap={1}>
+      <Heading level={1} textWrap="balance">
+        {children}
+      </Heading>
+      {sub ? <Text color="secondary">{sub}</Text> : null}
+    </VStack>
   );
 }

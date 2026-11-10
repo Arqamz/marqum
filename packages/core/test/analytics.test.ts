@@ -4,6 +4,7 @@ import {
   categorySeries,
   counterpartyStats,
   detectRecurring,
+  monthPulse,
   netPosition,
   robustZ,
   spendOf,
@@ -199,6 +200,39 @@ describe("category cards & averages", () => {
       pace: null,
     });
   });
+  it("ticker: spent vs the baseline's same-day pace; budget wins over average; share of the month", () => {
+    // NOW is the 15th of a 30-day month → pace = half the baseline
+    expect(food(ds)).toMatchObject({
+      baseline: 25000,
+      baseline_source: "average",
+      vs_pace: 30000 / 12500 - 1,
+    });
+    const budgeted = {
+      ...ds,
+      categories: ds.categories.map((c) => (c.id === "food" ? { ...c, budget: 60000 } : c)),
+    };
+    expect(food(budgeted)).toMatchObject({ baseline: 60000, baseline_source: "budget", vs_pace: 0 });
+    expect(food(ds)?.projected).toBe(60000);
+    const cards = categoryCards(ds, "2026-11", NOW);
+    expect(cards.reduce((s, c) => s + c.share, 0)).toBeCloseTo(1, 6);
+    const only = withRows(seeded(), {
+      transactions: [txn({ occurred_at: "2026-11-05T10:00", amount: -100, category_id: "food" })],
+    });
+    expect(food(only)).toMatchObject({ baseline: null, vs_pace: null, share: 1 });
+  });
+  it("monthPulse: total spend vs what income leaves, at today's pace", () => {
+    const only = withRows(seeded(), {
+      transactions: [txn({ occurred_at: "2026-11-05T10:00", amount: -rsOf(30000), category_id: "food" })],
+    });
+    const p = monthPulse(only, "2026-11", NOW);
+    expect(p).toMatchObject({
+      spent: rsOf(30000),
+      allowance: rsOf(85000),
+      pace: rsOf(42500),
+      projected: rsOf(60000),
+    });
+    expect(p.vs_pace).toBeCloseTo(30000 / 42500 - 1, 6);
+  });
   it("reimbursements offset the linked expense's category in the reimbursement's month", () => {
     const e = txn({ id: "e1", occurred_at: "2026-10-20T20:00", amount: -10000, category_id: "food.friends" });
     const r = txn({
@@ -221,6 +255,8 @@ describe("category cards & averages", () => {
     expect(cards.some((c) => c.category.id === "gifts")).toBe(false);
   });
 });
+
+const rsOf = (r: number) => r * 100;
 
 describe("robustZ & outliers", () => {
   it("uses MAD", () => {

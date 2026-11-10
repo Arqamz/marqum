@@ -1,13 +1,13 @@
+import { HStack } from "@astryxdesign/core/HStack";
+import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { CloudOff, LoaderCircle, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStore } from "../lib/store.ts";
 import { syncNow, syncState } from "../lib/sync.ts";
 import { usePendingCount } from "./dataset-provider.tsx";
+import { Button } from "./ui/button.tsx";
 
-/**
- * Sync state, shown only when it matters: offline, failed, or syncing for longer than 2 s.
- * A healthy, synced app shows nothing.
- */
+/** Sync state, shown only when it matters: offline, failed, or syncing for over 2 s. Healthy shows nothing. */
 export function SyncDot() {
   const s = useStore(syncState);
   const pending = usePendingCount();
@@ -21,31 +21,29 @@ export function SyncDot() {
     return () => clearTimeout(t);
   }, [s.status]);
 
-  const waiting = pending > 0 ? ` · ${pending} change${pending === 1 ? "" : "s"} saved on this device` : "";
-  let content: { label: string; icon: typeof CloudOff; tone: string; spin?: boolean } | null = null;
-  if (s.status === "offline") content = { label: `Offline${waiting}`, icon: CloudOff, tone: "text-fg-muted" };
+  const waiting = pending > 0 ? ` · ${pending} unsynced` : "";
+  let dot: { label: string; variant: "neutral" | "warning" | "accent"; icon: typeof CloudOff } | null = null;
+  if (s.status === "offline") dot = { label: `Offline${waiting}`, variant: "neutral", icon: CloudOff };
   else if (s.status === "error")
-    content = {
+    dot = {
       label: `Sync failed${s.message ? `: ${s.message}` : ""} — tap to retry`,
+      variant: "warning",
       icon: RefreshCw,
-      tone: "text-warn",
     };
-  else if (s.status === "syncing" && slow)
-    content = { label: "Syncing", icon: LoaderCircle, tone: "text-fg-subtle", spin: true };
+  else if (s.status === "syncing" && slow) dot = { label: "Syncing", variant: "accent", icon: LoaderCircle };
 
   return (
-    <span data-testid="sync-state" data-status={s.status} className="contents">
-      {content ? (
-        <button
-          type="button"
-          onClick={() => void syncNow()}
-          title={content.label}
-          aria-label={content.label}
-          className={`grid size-10 place-items-center rounded-full hover:bg-surface-2 ${content.tone}`}
-        >
-          <content.icon className={content.spin ? "motion-safe:animate-spin" : undefined} aria-hidden />
-        </button>
+    <HStack data-testid="sync-state" data-status={s.status} vAlign="center">
+      {dot ? (
+        <Button variant="ghost" size="icon" label={dot.label} onClick={() => void syncNow()}>
+          <StatusDot
+            variant={dot.variant}
+            label={dot.label}
+            isPulsing={s.status === "syncing"}
+            icon={<dot.icon aria-hidden />}
+          />
+        </Button>
       ) : null}
-    </span>
+    </HStack>
   );
 }

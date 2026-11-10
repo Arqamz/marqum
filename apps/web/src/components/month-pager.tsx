@@ -1,11 +1,12 @@
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { monthLabel } from "@marqum/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { type ReactNode, useRef } from "react";
+import { Button } from "./ui/button.tsx";
 
-/**
- * Month header with chevrons; swiping the content left/right moves to the next/previous month
- * (like Screen Time's week pager). `months` is oldest → newest.
- */
+/** Month header with chevrons; swipe the content to page months. `months` is oldest → newest. */
 export function MonthPager({
   months,
   month,
@@ -22,8 +23,8 @@ export function MonthPager({
   const next = i >= 0 && i < months.length - 1 ? months[i + 1] : undefined;
   const start = useRef<{ x: number; y: number } | null>(null);
   return (
-    <div
-      className="flex flex-col gap-4"
+    <VStack
+      gap={4}
       onTouchStart={(e) => {
         const t = e.touches[0];
         start.current = t ? { x: t.clientX, y: t.clientY } : null;
@@ -39,30 +40,30 @@ export function MonthPager({
         if (dx > 0 && prev) onChange(prev);
       }}
     >
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          aria-label={prev ? `Previous month, ${monthLabel(prev)}` : "No earlier month"}
+      <HStack justify="between" vAlign="center">
+        <Button
+          variant="ghost"
+          size="icon"
+          label={prev ? `Previous month, ${monthLabel(prev)}` : "No earlier month"}
           disabled={!prev}
           onClick={() => prev && onChange(prev)}
-          className="-ml-2 grid size-10 place-items-center rounded-full hover:bg-surface-2 disabled:opacity-30"
         >
           <ChevronLeft aria-hidden />
-        </button>
-        <span className="font-medium" data-testid="pager-month">
+        </Button>
+        <Text weight="semibold" data-testid="pager-month">
           {monthLabel(month)}
-        </span>
-        <button
-          type="button"
-          aria-label={next ? `Next month, ${monthLabel(next)}` : "No later month"}
+        </Text>
+        <Button
+          variant="ghost"
+          size="icon"
+          label={next ? `Next month, ${monthLabel(next)}` : "No later month"}
           disabled={!next}
           onClick={() => next && onChange(next)}
-          className="-mr-2 grid size-10 place-items-center rounded-full hover:bg-surface-2 disabled:opacity-30"
         >
           <ChevronRight aria-hidden />
-        </button>
-      </div>
+        </Button>
+      </HStack>
       {children}
-    </div>
+    </VStack>
   );
 }

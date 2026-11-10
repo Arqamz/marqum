@@ -210,7 +210,7 @@ describe("closeChecklist", () => {
         }),
       ],
       recurring: [
-        recurring("iCloud", 90000, { category_id: "subscriptions.icloud" }),
+        recurring("iCloud", 90000, { category_id: "subscriptions.essentials" }),
         recurring("Electricity", 20000, { category_id: "bills.electricity" }),
       ],
       loans: [

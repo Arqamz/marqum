@@ -1,59 +1,85 @@
-import type { InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
+import { InputGroup, InputGroupText } from "@astryxdesign/core/InputGroup";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
+import type { InputHTMLAttributes, ReactNode } from "react";
 import { cn } from "../../lib/cn.ts";
+import { opt } from "../../lib/opt.ts";
 
-export const inputClass =
-  "h-12 w-full rounded-control border border-border bg-surface px-4 text-base text-fg outline-none transition-colors focus:border-accent";
+export { TextInput };
 
+/**
+ * Native input for the types Astryx's TextInput doesn't take (date, month). Styled like an Astryx control.
+ * For text, use TextInput.
+ */
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn(inputClass, className)} {...props} />;
-}
-
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={cn(inputClass, "h-auto min-h-24 py-3", className)} {...props} />;
+  return (
+    <input
+      className={cn(
+        "h-10 w-full rounded-control border border-border bg-surface px-3 text-base text-fg outline-none focus:border-accent",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
 
 /** Rs-prefixed amount entry: numeric keypad on phones, tabular figures. */
 export function MoneyInput({
   value,
   onChange,
-  className,
   autoFocus,
   label,
-  id,
+  hideLabel,
+  description,
+  size = "lg",
 }: {
   value: string;
   onChange: (v: string) => void;
-  className?: string;
   autoFocus?: boolean;
   label: string;
+  hideLabel?: boolean;
+  description?: string;
+  size?: "md" | "lg";
+  className?: string;
   id?: string;
 }) {
+  // The group is named "Rs" (hidden) so the field's own name stays exactly `label` for screen readers and tests;
+  // the visible label is plain text above it.
   return (
-    <div className={cn("relative", className)}>
-      <span className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-fg-muted">Rs</span>
-      <input
-        id={id}
-        aria-label={label}
-        inputMode="decimal"
-        autoComplete="off"
-        // biome-ignore lint/a11y/noAutofocus: amount is the only thing to type in these sheets
-        autoFocus={autoFocus}
-        value={value}
-        onChange={(e) => onChange(e.target.value.replace(/[^\d.,]/g, ""))}
-        className={cn(inputClass, "num pl-11 text-lg")}
-        placeholder="0"
-      />
-    </div>
+    <VStack gap={1.5}>
+      {hideLabel ? null : (
+        <Text type="label" aria-hidden>
+          {label}
+        </Text>
+      )}
+      {description ? <Text type="supporting">{description}</Text> : null}
+      <InputGroup label="Rs" isLabelHidden size={size}>
+        <InputGroupText>Rs</InputGroupText>
+        <TextInput
+          label={label}
+          isLabelHidden
+          inputMode="decimal"
+          autoComplete="off"
+          {...opt({ hasAutoFocus: autoFocus })}
+          value={value}
+          onChange={(v) => onChange(v.replace(/[^\d.,]/g, ""))}
+          placeholder="0"
+          controlClassName="num"
+          width="100%"
+        />
+      </InputGroup>
+    </VStack>
   );
 }
 
+/** Label + any control (for controls that don't carry their own label, like a native select). */
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: ReactNode }) {
   return (
-    // biome-ignore lint/a11y/noLabelWithoutControl: the control is passed as children
-    <label className="flex flex-col gap-2">
-      <span className="text-sm text-fg-muted">{label}</span>
+    <VStack as="label" gap={1.5}>
+      <Text type="label">{label}</Text>
       {children}
-      {hint ? <span className="text-sm text-fg-muted">{hint}</span> : null}
-    </label>
+      {hint ? <Text type="supporting">{hint}</Text> : null}
+    </VStack>
   );
 }

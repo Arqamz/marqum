@@ -120,7 +120,7 @@ for (const scheme of ["light", "dark"] as const) {
 
     // Mark a transaction as a yearly charge from its tag sheet
     await page.goto("/#/activity");
-    await page.getByTestId("txn-row").filter({ hasText: "Apple Com Bill" }).first().click();
+    await page.getByTestId("txn-row").filter({ hasText: "Apple.com Bill" }).first().click();
     await page.getByTestId("repeats").getByRole("radio", { name: "Yearly" }).click();
     await shot("tag-repeats");
     await page.getByRole("button", { name: "Save" }).click();
@@ -140,7 +140,9 @@ for (const scheme of ["light", "dark"] as const) {
       mimeType: "text/csv",
       buffer: Buffer.from(novemberCsv(world.nayaClosing)),
     });
-    await expect(page.getByText("Imported NayaPay 6–7 Nov · 3 new")).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "Notifications" }).getByText("Imported NayaPay 6–7 Nov · 3 new"),
+    ).toBeVisible();
     await expect
       .poll(() => world.server.dataset().transactions.filter((t) => t.status === "provisional").length)
       .toBe(0);

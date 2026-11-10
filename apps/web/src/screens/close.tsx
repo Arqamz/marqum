@@ -1,3 +1,10 @@
+import { Badge } from "@astryxdesign/core/Badge";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { List, ListItem } from "@astryxdesign/core/List";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import {
   type ChecklistItem,
   type CloseChecklist,
@@ -15,13 +22,11 @@ import { Check, ChevronRight, CircleAlert, Lock, X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
-import { Headline, Screen, Section } from "../components/shell.tsx";
+import { Screen, Section } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Chip, Skeleton } from "../components/ui/controls.tsx";
-import { Field, Input } from "../components/ui/input.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
 import { api } from "../lib/api.ts";
-import { cn } from "../lib/cn.ts";
 import { enqueue } from "../lib/commands.ts";
 import { monthName } from "../lib/months.ts";
 import { reminderMonth } from "../lib/reminders.ts";
@@ -40,12 +45,12 @@ export function CloseScreen({ month }: { month?: string }) {
           month={month && isTracked(ds, month) ? month : defaultMonth(ds, now)}
         />
       ) : (
-        <div className="flex flex-col gap-3">
-          <Skeleton className="h-8 w-2/3" />
+        <VStack gap={3}>
+          <Skeleton width="66%" height={32} />
           {[0, 1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-12" />
+            <Skeleton key={i} height={48} index={i} />
           ))}
-        </div>
+        </VStack>
       )}
     </Screen>
   );
@@ -96,22 +101,22 @@ function CloseContent({ ds, now, month }: { ds: Dataset; now: string; month: str
   return (
     <>
       {months.length > 1 ? (
-        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none]">
+        <HStack gap={2} wrap="wrap">
           {months.map((m) => (
             <Chip
               key={m}
               selected={m === month}
               onClick={() => void router.navigate({ to: "/close", search: { month: m } })}
+              {...(isClosed(ds, m) ? { icon: <Lock aria-hidden /> } : {})}
             >
-              {isClosed(ds, m) ? <Lock aria-hidden /> : null}
               {monthLabel(m)}
             </Chip>
           ))}
-        </div>
+        </HStack>
       ) : null}
 
       {closed ? (
-        <section className="flex flex-col items-center gap-4 py-8 text-center" data-testid="sealed">
+        <VStack gap={4} hAlign="center" data-testid="sealed">
           <motion.span
             initial={reduce ? false : { scale: 0.5, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
@@ -120,19 +125,22 @@ function CloseContent({ ds, now, month }: { ds: Dataset; now: string; month: str
           >
             <Check aria-hidden />
           </motion.span>
-          <Headline
-            sub={
-              record?.closed_at
-                ? `Sealed ${dayLabel(record.closed_at.slice(0, 10))} · read-only; retagging asks for your fingerprint`
-                : "Sealing — the snapshot is written when this syncs"
-            }
-          >
-            {monthName(month)} is closed
-          </Headline>
+          <VStack gap={2} hAlign="center">
+            <Heading level={1} textWrap="balance" justify="center">
+              {monthName(month)} is closed
+            </Heading>
+            <Badge
+              variant={record?.closed_at ? "success" : "info"}
+              label={record?.closed_at ? `Sealed ${dayLabel(record.closed_at.slice(0, 10))}` : "Sealing"}
+              icon={<Lock aria-hidden />}
+            />
+          </VStack>
           {record?.snapshot_sha256 ? (
-            <p className="font-mono text-xs break-all text-fg-muted">sha256 {record.snapshot_sha256}</p>
+            <Text type="code" color="secondary" maxLines={1}>
+              sha256 {record.snapshot_sha256}
+            </Text>
           ) : null}
-          <div className="flex gap-2">
+          <HStack gap={2}>
             <Button
               variant="secondary"
               disabled={!record?.snapshot_key}
@@ -146,31 +154,32 @@ function CloseContent({ ds, now, month }: { ds: Dataset; now: string; month: str
             <Button variant="danger" onClick={() => setReopen(true)}>
               Reopen
             </Button>
-          </div>
-        </section>
+          </HStack>
+        </VStack>
       ) : (
         <>
-          <Headline
-            sub={
-              checklist.can_close
-                ? "Everything checks out. Closing seals a snapshot you can't change."
-                : `Close from ${dayLabel(checklist.closable_from)} once these are done.`
-            }
-          >
-            {checklist.can_close
-              ? `${monthName(month)} is ready to close`
-              : `${blocking.length} ${blocking.length === 1 ? "thing" : "things"} before ${monthName(month)} can close`}
-          </Headline>
+          <VStack gap={2} hAlign="start">
+            <Heading level={1} textWrap="balance">
+              {checklist.can_close
+                ? `${monthName(month)} is ready to close`
+                : `${blocking.length} ${blocking.length === 1 ? "thing" : "things"} before ${monthName(month)} can close`}
+            </Heading>
+            {checklist.can_close ? (
+              <Text type="supporting">Closing seals a snapshot you can't change.</Text>
+            ) : (
+              <Badge variant="neutral" label={`Closable from ${dayLabel(checklist.closable_from)}`} />
+            )}
+          </VStack>
           <Section>
-            <ul className="-mx-3 flex flex-col" data-testid="checklist">
+            <List hasDividers edge="flush" data-testid="checklist">
               {checklist.items.map((item) => (
                 <ChecklistRow key={item.id} item={item} onFix={(a) => router.history.push(routeFor(a))} />
               ))}
-            </ul>
+            </List>
           </Section>
-          <div className="sticky bottom-[calc(var(--tabbar-h)+env(safe-area-inset-bottom)+var(--spacing)*4)] lg:bottom-6">
+          <VStack className="sticky bottom-[calc(var(--tabbar-h)+env(safe-area-inset-bottom)+1rem)] lg:bottom-6">
             <Button
-              className="w-full"
+              width="full"
               variant="primary"
               size="lg"
               disabled={!checklist.can_close}
@@ -186,7 +195,7 @@ function CloseContent({ ds, now, month }: { ds: Dataset; now: string; month: str
             >
               Close {monthName(month)}
             </Button>
-          </div>
+          </VStack>
         </>
       )}
 
@@ -208,35 +217,22 @@ const keepRs = (s: string): string => s.replace(/Rs /g, "Rs\u00a0");
 function ChecklistRow({ item, onFix }: { item: ChecklistItem; onFix: (action: string) => void }) {
   const Icon = item.ok ? Check : item.severity === "warn" ? CircleAlert : X;
   const tone = item.ok ? "text-pos" : item.severity === "warn" ? "text-warn" : "text-neg";
-  const body = (
-    <>
-      <Icon
-        className={cn("mt-0.5 shrink-0", tone)}
-        aria-label={item.ok ? "Done" : item.severity === "warn" ? "Warning" : "To do"}
-      />
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className={cn(item.ok && "text-fg-muted")}>{keepRs(item.label)}</span>
-        {item.detail ? <span className="text-sm text-fg-muted">{item.detail}</span> : null}
-      </span>
-      {!item.ok && item.action ? (
-        <ChevronRight className="mt-0.5 shrink-0 text-fg-subtle" aria-hidden />
-      ) : null}
-    </>
-  );
+  const fix = !item.ok && item.action ? item.action : null;
   return (
-    <li>
-      {!item.ok && item.action ? (
-        <button
-          type="button"
-          onClick={() => item.action && onFix(item.action)}
-          className="flex w-full items-start gap-3 rounded-control px-3 py-3 text-left hover:bg-surface-2"
-        >
-          {body}
-        </button>
-      ) : (
-        <div className="flex items-start gap-3 px-3 py-3">{body}</div>
-      )}
-    </li>
+    <ListItem
+      align="first-line"
+      startContent={
+        <Icon
+          className={tone}
+          aria-label={item.ok ? "Done" : item.severity === "warn" ? "Warning" : "To do"}
+        />
+      }
+      label={<Text {...(item.ok ? { color: "secondary" as const } : {})}>{keepRs(item.label)}</Text>}
+      {...(item.detail ? { description: <Text type="supporting">{item.detail}</Text> } : {})}
+      {...(fix
+        ? { endContent: <ChevronRight className="text-fg-subtle" aria-hidden />, onClick: () => onFix(fix) }
+        : {})}
+    />
   );
 }
 
@@ -255,10 +251,11 @@ function ReopenSheet({
       open={open}
       onOpenChange={onOpenChange}
       title={`Reopen ${monthName(month)}?`}
-      description="Reopening is logged and the next close writes a new snapshot version."
+      description="Logged; the next close writes a new snapshot."
     >
-      <form
-        className="flex flex-col gap-4"
+      <VStack
+        as="form"
+        gap={4}
         onSubmit={async (e) => {
           e.preventDefault();
           if (reason.trim().length < 3) return;
@@ -268,17 +265,11 @@ function ReopenSheet({
           onOpenChange(false);
         }}
       >
-        <Field label="Why">
-          <Input
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="Re-issued statement"
-          />
-        </Field>
+        <TextInput label="Why" value={reason} onChange={setReason} placeholder="Re-issued statement" />
         <Button type="submit" variant="primary" size="lg" disabled={reason.trim().length < 3}>
           Confirm and reopen
         </Button>
-      </form>
+      </VStack>
     </Sheet>
   );
 }

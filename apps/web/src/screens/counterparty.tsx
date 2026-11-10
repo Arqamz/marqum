@@ -1,7 +1,16 @@
+import { Card } from "@astryxdesign/core/Card";
+import { CheckboxList, CheckboxListItem } from "@astryxdesign/core/CheckboxList";
+import { Grid } from "@astryxdesign/core/Grid";
+import { HStack } from "@astryxdesign/core/HStack";
+import { List, ListItem } from "@astryxdesign/core/List";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { counterpartyStats, type Dataset, formatRs, isClosed } from "@marqum/core";
 import type { Counterparty } from "@marqum/schema";
-import { Link } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { Pencil, Search } from "lucide-react";
+import { type FormEvent, useMemo, useState } from "react";
 import { CategoryPicker } from "../components/category-picker.tsx";
 import { PatternStrip, SentReceived } from "../components/charts.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
@@ -11,9 +20,9 @@ import { TagSheet } from "../components/tag-sheet.tsx";
 import { TxnList } from "../components/txn-list.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Segmented, Skeleton } from "../components/ui/controls.tsx";
-import { Field, Input } from "../components/ui/input.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
 import { enqueue } from "../lib/commands.ts";
+import { opt } from "../lib/opt.ts";
 import { categoryPath, lookup } from "../lib/view.ts";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -28,9 +37,9 @@ export function CounterpartyScreen({ id }: { id: string }) {
       {ds && cp ? (
         <CounterpartyContent ds={ds} now={now} cp={cp} />
       ) : ds ? (
-        <Headline>That person or merchant was merged or removed.</Headline>
+        <Headline>Merged or removed</Headline>
       ) : (
-        <Skeleton className="h-48 rounded-card" />
+        <Skeleton height={192} />
       )}
     </Screen>
   );
@@ -52,6 +61,7 @@ function peak(values: number[], labels: string[]): string | null {
 }
 
 function CounterpartyContent({ ds, now, cp }: { ds: Dataset; now: string; cp: Counterparty }) {
+  const navigate = useNavigate();
   const stats = useMemo(() => counterpartyStats(ds, cp.id, now), [ds, cp.id, now]);
   const l = useMemo(() => lookup(ds), [ds]);
   const [open, setOpen] = useState<string | null>(null);
@@ -61,36 +71,44 @@ function CounterpartyContent({ ds, now, cp }: { ds: Dataset; now: string; cp: Co
   const day = peak(stats.weekday, WEEKDAYS);
   const hour = peak(stats.hour, HOURS);
 
-  const headline =
-    stats.total_sent >= stats.total_received
-      ? `${formatRs(stats.total_sent)} sent to ${cp.name} over ${stats.count} payments`
-      : `${formatRs(stats.total_received)} received from ${cp.name} over ${stats.count} payments`;
+  const sentMore = stats.total_sent >= stats.total_received;
   const sub = [
+    `${stats.count} payments`,
     stats.typical_amount ? `usually ${formatRs(stats.typical_amount)}` : null,
     often,
-    day && hour ? `mostly ${day}s around ${hour}` : null,
+    day && hour ? `${day} ~${hour}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
 
   return (
     <>
-      <Headline sub={sub || undefined}>{headline}</Headline>
+      <Headline sub={sub}>
+        {formatRs(sentMore ? stats.total_sent : stats.total_received)} {sentMore ? "sent" : "received"}
+      </Headline>
 
-      <dl className="grid grid-cols-2 gap-4">
-        <div className="flex flex-col gap-1">
-          <dt className="text-sm text-fg-muted">Sent</dt>
-          <dd>
+      <Grid columns={2} gap={3}>
+        <Card padding={4}>
+          <VStack gap={1}>
+            <Text type="label" color="secondary">
+              Sent
+            </Text>
             <Money value={stats.total_sent} className="text-xl font-medium" />
-          </dd>
-        </div>
-        <div className="flex flex-col gap-1">
-          <dt className="text-sm text-fg-muted">Received</dt>
-          <dd>
-            <Money value={stats.total_received} className="text-xl font-medium" />
-          </dd>
-        </div>
-      </dl>
+          </VStack>
+        </Card>
+        <Card padding={4}>
+          <VStack gap={1}>
+            <Text type="label" color="secondary">
+              Received
+            </Text>
+            <Money
+              value={stats.total_received}
+              className="text-xl font-medium"
+              {...opt({ tone: stats.total_received > 0 ? ("pos" as const) : undefined })}
+            />
+          </VStack>
+        </Card>
+      </Grid>
 
       <Section title="By month">
         <SentReceived data={stats.series} />
@@ -103,32 +121,31 @@ function CounterpartyContent({ ds, now, cp }: { ds: Dataset; now: string; cp: Co
 
       {stats.categories.length > 0 ? (
         <Section title="Tagged as">
-          <ul className="flex flex-col gap-2">
-            {stats.categories.map((c) => (
-              <li key={c.category_id ?? "none"} className="flex justify-between text-sm">
-                {c.category_id ? (
-                  <Link
-                    to="/category/$id"
-                    params={{ id: c.category_id.split(".")[0] ?? c.category_id }}
-                    className="hover:underline"
-                  >
-                    {categoryPath(c.category_id, l)}
-                  </Link>
-                ) : (
-                  <span className="text-fg-muted">Untagged</span>
-                )}
-                <Money value={c.total} />
-              </li>
-            ))}
-          </ul>
+          <List edge="flush" density="compact">
+            {stats.categories.map((c) => {
+              const top = c.category_id ? (c.category_id.split(".")[0] ?? c.category_id) : null;
+              return (
+                <ListItem
+                  key={c.category_id ?? "none"}
+                  label={c.category_id ? (categoryPath(c.category_id, l) ?? c.category_id) : "Untagged"}
+                  endContent={<Money value={c.total} />}
+                  {...opt({
+                    onClick: top
+                      ? () => void navigate({ to: "/category/$id", params: { id: top } })
+                      : undefined,
+                  })}
+                />
+              );
+            })}
+          </List>
         </Section>
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" onClick={() => setEdit(true)}>
-          Rename, merge or set a default
+      <HStack>
+        <Button variant="secondary" icon={<Pencil aria-hidden />} onClick={() => setEdit(true)}>
+          Edit
         </Button>
-      </div>
+      </HStack>
 
       <Section title="Transactions">
         <TxnList
@@ -167,9 +184,10 @@ function EditCounterparty({
     .slice(0, 8);
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title={`Edit ${cp.name}`}>
-      <form
-        className="flex flex-col gap-6"
-        onSubmit={(e) => {
+      <VStack
+        as="form"
+        gap={5}
+        onSubmit={(e: FormEvent) => {
           e.preventDefault();
           void enqueue("upsertCounterparty", {
             counterparty_id: cp.id,
@@ -183,9 +201,7 @@ function EditCounterparty({
           onOpenChange(false);
         }}
       >
-        <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
+        <TextInput label="Name" value={name} onChange={setName} />
         <Segmented
           label="Kind"
           value={kind}
@@ -197,40 +213,31 @@ function EditCounterparty({
             { value: "self", label: "Me" },
           ]}
         />
-        <div className="flex flex-col gap-2">
-          <span className="text-sm text-fg-muted">Default category for new payments</span>
+        <VStack gap={2}>
+          <Text type="label">Default category</Text>
           <CategoryPicker ds={ds} value={category} onChange={setCategory} />
-        </div>
-        <div className="flex flex-col gap-2">
-          <span className="text-sm text-fg-muted">Same person, different spelling? Merge into {cp.name}</span>
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
+        </VStack>
+        <VStack gap={2}>
+          <TextInput
+            type="search"
+            label={`Merge into ${cp.name}`}
             placeholder="Find"
-            aria-label="Find to merge"
+            startIcon={Search}
+            value={q}
+            onChange={setQ}
           />
-          <ul className="flex flex-col">
-            {others.map((o) => (
-              <li key={o.id}>
-                <label className="flex items-center gap-3 py-2">
-                  <input
-                    type="checkbox"
-                    className="size-5 accent-[var(--accent)]"
-                    checked={merge.includes(o.id)}
-                    onChange={(e) =>
-                      setMerge((m) => (e.target.checked ? [...m, o.id] : m.filter((x) => x !== o.id)))
-                    }
-                  />
-                  {o.name}
-                </label>
-              </li>
-            ))}
-          </ul>
-        </div>
+          {others.length > 0 ? (
+            <CheckboxList label="Merge" isLabelHidden value={merge} onChange={setMerge}>
+              {others.map((o) => (
+                <CheckboxListItem key={o.id} value={o.id} label={o.name} />
+              ))}
+            </CheckboxList>
+          ) : null}
+        </VStack>
         <Button type="submit" variant="primary" size="lg">
           {merge.length > 0 ? `Save and merge ${merge.length}` : "Save"}
         </Button>
-      </form>
+      </VStack>
     </Sheet>
   );
 }
