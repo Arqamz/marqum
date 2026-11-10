@@ -4,7 +4,7 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { Link, useRouter } from "@tanstack/react-router";
-import { ArrowLeft, ArrowLeftRight, CalendarCheck, House, Settings, Target } from "lucide-react";
+import { ArrowLeft, ArrowLeftRight, House, Settings, Target } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../lib/cn.ts";
 import { useStore } from "../lib/store.ts";
@@ -16,7 +16,6 @@ const NAV = [
   { to: "/", label: "Home", icon: House },
   { to: "/activity", label: "Activity", icon: ArrowLeftRight },
   { to: "/plan", label: "Plan", icon: Target },
-  { to: "/close", label: "Close", icon: CalendarCheck },
   { to: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
@@ -64,7 +63,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
         aria-label="Main"
         className="fixed inset-x-0 bottom-0 z-30 border-border border-t bg-surface pb-safe lg:hidden"
       >
-        <div className="mx-auto grid h-[var(--tabbar-h)] max-w-[var(--content-max)] grid-cols-5">
+        <div className="mx-auto grid h-[var(--tabbar-h)] max-w-[var(--content-max)] grid-cols-4">
           {NAV.map(({ to, label, icon: Icon }) => (
             <Link
               key={to}

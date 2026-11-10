@@ -124,11 +124,13 @@ export interface CategoryCard {
 /** The month at a glance: total spend so far vs what income leaves for spending, at the same day of month. */
 export interface MonthPulse {
   spent: number;
-  /** income − goal contributions − loan installments (what's there to spend in a month); null without income */
-  allowance: number | null;
-  /** allowance × day fraction */
+  /** spent ÷ days so far this month */
+  per_day: number;
+  /** average total monthly spend over complete months; null before the first complete month */
+  average: number | null;
+  /** average × day fraction */
   pace: number | null;
-  /** spent vs pace as a fraction; null without pace */
+  /** spent vs pace as a fraction (+0.2 = 20% more than usual by this day); null without an average */
   vs_pace: number | null;
   /** spend so far extended to month end */
   projected: number;
@@ -202,8 +204,8 @@ export interface PlannedCategory {
   nature: "fixed" | "variable";
   /** positive paisa, after levers/adjustments */
   planned: number;
-  /** budget = Category.budget; average = history average; none = neither (0); recurring = fixed category covered by Recurring rows (not added again) */
-  source: "budget" | "average" | "none" | "recurring";
+  /** budget = Category.budget; average = history average; estimate = daily rate so far (no complete month yet); none = neither (0); recurring = fixed category covered by Recurring rows (not added again) */
+  source: "budget" | "average" | "estimate" | "none" | "recurring";
 }
 
 export interface WhatIfInput {
@@ -269,6 +271,10 @@ export interface SavingsHistory {
   average: number | null;
   /** history = complete months; estimate = this month only (income − spend so far at today's pace) */
   basis: "history" | "estimate" | "none";
+  /** estimate only: this month's income, spending projected to month end, and the daily rate behind it */
+  income?: number;
+  spend?: number;
+  per_day?: number;
 }
 
 export interface WhatIfResult {

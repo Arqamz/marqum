@@ -176,10 +176,22 @@ for (const scheme of ["light", "dark"] as const) {
       .toBe(true);
     await page.keyboard.press("Escape");
 
-    // Close month (October)
-    await page.goto("/#/close");
-    await expect(page.getByTestId("checklist")).toBeVisible();
+    // Close month (October): no tab; a banner on Home opens the close sheet
+    await page.goto("/#/");
+    const closeBanner = page.getByTestId("close-banner");
+    await expect(closeBanner).toContainText("Close October");
+    await expect(page.getByRole("navigation", { name: "Main" }).first().getByText("Close")).toHaveCount(0);
+    await shot("close-banner");
+    await closeBanner.getByRole("button", { name: "Close" }).click();
+    await expect(page.getByRole("dialog").getByTestId("checklist")).toBeVisible();
     await shot("close");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("checklist")).toHaveCount(0);
+    // old links still land on the same sheet
+    await page.goto("/#/close");
+    await expect(page.getByRole("dialog").getByTestId("checklist")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL(/#\/$/);
 
     // Plan: money split, fixed charges, budgets, goals, loans
     await page.goto("/#/plan");

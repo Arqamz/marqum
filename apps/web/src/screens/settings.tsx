@@ -265,10 +265,11 @@ function SecuritySection() {
     void biometricEnrolled().then(setEnrolled);
   }, []);
   return (
-    <Group title="Closed-month edits">
+    <Group title="Security">
       {isNative() ? (
         <ListItem
           label="Fingerprint"
+          description="Confirms closed-month edits"
           endContent={enrolled ? on : chevron}
           onClick={async () => {
             try {
@@ -285,7 +286,7 @@ function SecuritySection() {
       ) : (
         <ListItem
           label="Add a passkey"
-          description="Skip the passcode"
+          description="Confirms closed-month edits"
           endContent={chevron}
           onClick={async () => {
             try {
@@ -375,17 +376,32 @@ function PermissionsSection() {
   );
 }
 
+type Device = { id: string; name: string; last_seen: string | null; current?: boolean };
+
+const isTemporary = (d: Device) => /temporary/i.test(d.name);
+
+const fetchDevices = () => api<Device[]>(API.devices).catch((): Device[] => []);
+
 function DevicesSection() {
-  const [devices, setDevices] = useState<
-    { id: string; name: string; last_seen_at?: string; current?: boolean }[] | null
-  >(null);
-  const load = () =>
-    void api<{ id: string; name: string; last_seen_at?: string; current?: boolean }[]>(API.devices)
-      .then(setDevices)
-      .catch(() => setDevices([]));
+  const [devices, setDevices] = useState<Device[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const load = () => void fetchDevices().then(setDevices);
   useEffect(load, []);
   const me = auth.get();
   const myId = me.status === "signed-in" ? me.session.device_id : "";
+  const mine = (d: Device) => d.id === myId || d.current === true;
+  const remove = async (key: string, list: Device[]) => {
+    setBusy(key);
+    try {
+      for (const d of list) await api(`${API.devices}/${d.id}`, { method: "DELETE" });
+      setDevices((cur) => cur?.filter((d) => !list.some((x) => x.id === d.id)) ?? cur);
+    } catch (e) {
+      toast({ tone: "error", title: "Couldn't remove", detail: e instanceof Error ? e.message : "" });
+    } finally {
+      setBusy(null);
+      load();
+    }
+  };
   if (devices === null)
     return (
       <VStack as="section" gap={3}>
@@ -400,38 +416,50 @@ function DevicesSection() {
         <Text type="supporting">Unavailable offline</Text>
       </VStack>
     );
+  const temporary = devices.filter((d) => isTemporary(d) && !mine(d));
   return (
-    <Group title="Devices">
-      {devices.map((d) => {
-        const mine = d.id === myId || d.current;
-        return (
-          <ListItem
-            key={d.id}
-            label={d.name}
-            {...opt({
-              description:
-                !mine && d.last_seen_at ? `Last seen ${dayLabel(d.last_seen_at.slice(0, 10))}` : undefined,
-            })}
-            endContent={
-              mine ? (
-                <Badge label="This device" variant="info" />
-              ) : (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Sign out ${d.name}`}
-                  onClick={async () => {
-                    await api(`${API.devices}/${d.id}`, { method: "DELETE" });
-                    load();
-                  }}
-                >
-                  <Trash2 aria-hidden />
-                </Button>
-              )
-            }
-          />
-        );
+    <Group
+      title="Devices"
+      {...opt({
+        after:
+          temporary.length > 1 ? (
+            <HStack>
+              <Button
+                variant="secondary"
+                loading={busy === "temporary"}
+                onClick={() => void remove("temporary", temporary)}
+              >
+                Remove {temporary.length} temporary
+              </Button>
+            </HStack>
+          ) : undefined,
       })}
+    >
+      {devices.map((d) => (
+        <ListItem
+          key={d.id}
+          label={d.name}
+          {...opt({
+            description:
+              !mine(d) && d.last_seen ? `Last seen ${dayLabel(d.last_seen.slice(0, 10))}` : undefined,
+          })}
+          endContent={
+            mine(d) ? (
+              <Badge label="This device" variant="info" />
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`Sign out ${d.name}`}
+                loading={busy === d.id}
+                onClick={() => void remove(d.id, [d])}
+              >
+                <Trash2 aria-hidden />
+              </Button>
+            )
+          }
+        />
+      ))}
     </Group>
   );
 }

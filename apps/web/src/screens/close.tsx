@@ -1,7 +1,7 @@
 import { Badge } from "@astryxdesign/core/Badge";
-import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { List, ListItem } from "@astryxdesign/core/List";
+import { Selector } from "@astryxdesign/core/Selector";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
@@ -22,9 +22,7 @@ import { Check, ChevronRight, CircleAlert, Lock, X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
-import { Screen, Section } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
-import { Chip, Skeleton } from "../components/ui/controls.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
 import { api } from "../lib/api.ts";
 import { enqueue } from "../lib/commands.ts";
@@ -33,26 +31,23 @@ import { reminderMonth } from "../lib/reminders.ts";
 import { stepUp } from "../lib/stepup.ts";
 import { isTracked, trackedMonthsUpTo } from "../lib/tracking.ts";
 
+/** The /close route (old links): the close sheet over Home; dismissing it goes home. */
 export function CloseScreen({ month }: { month?: string }) {
   const ds = useDataset();
   const now = useNow();
+  const router = useRouter();
+  if (!ds) return null;
+  const target = month && isTracked(ds, month) ? month : defaultMonth(ds, now);
   return (
-    <Screen>
-      {ds ? (
-        <CloseContent
-          ds={ds}
-          now={now}
-          month={month && isTracked(ds, month) ? month : defaultMonth(ds, now)}
-        />
-      ) : (
-        <VStack gap={3}>
-          <Skeleton width="66%" height={32} />
-          {[0, 1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} height={48} index={i} />
-          ))}
-        </VStack>
-      )}
-    </Screen>
+    <CloseSheet
+      ds={ds}
+      now={now}
+      month={target}
+      open
+      onOpenChange={(o) => {
+        if (!o && router.history.location.pathname === "/close") router.history.replace("/");
+      }}
+    />
   );
 }
 
@@ -83,12 +78,29 @@ function useServerChecklist(month: string, closed: boolean): CloseChecklist | nu
   return server;
 }
 
-function CloseContent({ ds, now, month }: { ds: Dataset; now: string; month: string }) {
+/** The month-close flow: checklist with tap-to-fix, seal, sealed state, snapshot, reopen. */
+export function CloseSheet({
+  ds,
+  now,
+  month: initial,
+  open,
+  onOpenChange,
+}: {
+  ds: Dataset;
+  now: string;
+  month: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const router = useRouter();
   const reduce = useReducedMotion();
+  const [month, setMonth] = useState(initial);
+  useEffect(() => {
+    if (open) setMonth(initial);
+  }, [open, initial]);
   const closed = isClosed(ds, month);
   const local = useMemo(() => closeChecklist(ds, month, now), [ds, month, now]);
-  const server = useServerChecklist(month, closed);
+  const server = useServerChecklist(month, closed || !open);
   // Local first (instant, reflects queued fixes); the server's verdict wins when it is stricter.
   const checklist = server && !server.can_close ? server : local;
   const [snapshot, setSnapshot] = useState<string | null>(null);
@@ -100,105 +112,119 @@ function CloseContent({ ds, now, month }: { ds: Dataset; now: string; month: str
 
   return (
     <>
-      {months.length > 1 ? (
-        <HStack gap={2} wrap="wrap">
-          {months.map((m) => (
-            <Chip
-              key={m}
-              selected={m === month}
-              onClick={() => void router.navigate({ to: "/close", search: { month: m } })}
-              {...(isClosed(ds, m) ? { icon: <Lock aria-hidden /> } : {})}
-            >
-              {monthLabel(m)}
-            </Chip>
-          ))}
-        </HStack>
-      ) : null}
-
-      {closed ? (
-        <VStack gap={4} hAlign="center" data-testid="sealed">
-          <motion.span
-            initial={reduce ? false : { scale: 0.5, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-            className="grid size-16 place-items-center rounded-full bg-pos-soft text-pos"
-          >
-            <Check aria-hidden />
-          </motion.span>
-          <VStack gap={2} hAlign="center">
-            <Heading level={1} textWrap="balance" justify="center">
-              {monthName(month)} is closed
-            </Heading>
-            <Badge
-              variant={record?.closed_at ? "success" : "info"}
-              label={record?.closed_at ? `Sealed ${dayLabel(record.closed_at.slice(0, 10))}` : "Sealing"}
-              icon={<Lock aria-hidden />}
+      <Sheet
+        open={open}
+        onOpenChange={onOpenChange}
+        title={closed ? `${monthName(month)} is closed` : `Close ${monthName(month)}`}
+        {...(closed
+          ? {}
+          : {
+              description: checklist.can_close
+                ? "Seals a snapshot you can't change."
+                : `${blocking.length} to fix · from ${dayLabel(checklist.closable_from)}`,
+            })}
+        {...(closed
+          ? {}
+          : {
+              footer: (
+                <Button
+                  width="full"
+                  variant="primary"
+                  size="lg"
+                  disabled={!checklist.can_close}
+                  loading={closing}
+                  onClick={async () => {
+                    setClosing(true);
+                    try {
+                      await enqueue("closeMonth", { month });
+                    } finally {
+                      setClosing(false);
+                    }
+                  }}
+                >
+                  Close {monthName(month)}
+                </Button>
+              ),
+            })}
+      >
+        <VStack gap={5}>
+          {months.length > 1 ? (
+            <Selector
+              label="Month"
+              isLabelHidden
+              value={month}
+              onChange={(m) => m && setMonth(m)}
+              presentation="adaptive"
+              width="100%"
+              options={[...months].reverse().map((m) => ({
+                value: m,
+                label: `${monthLabel(m)}${isClosed(ds, m) ? " · closed" : ""}`,
+              }))}
             />
-          </VStack>
-          {record?.snapshot_sha256 ? (
-            <Text type="code" color="secondary" maxLines={1}>
-              sha256 {record.snapshot_sha256}
-            </Text>
           ) : null}
-          <HStack gap={2}>
-            <Button
-              variant="secondary"
-              disabled={!record?.snapshot_key}
-              onClick={async () => {
-                const json = await api<unknown>(API.snapshot.replace(":month", month));
-                setSnapshot(JSON.stringify(json, null, 2));
-              }}
-            >
-              View snapshot
-            </Button>
-            <Button variant="danger" onClick={() => setReopen(true)}>
-              Reopen
-            </Button>
-          </HStack>
-        </VStack>
-      ) : (
-        <>
-          <VStack gap={2} hAlign="start">
-            <Heading level={1} textWrap="balance">
-              {checklist.can_close
-                ? `${monthName(month)} is ready to close`
-                : `${blocking.length} ${blocking.length === 1 ? "thing" : "things"} before ${monthName(month)} can close`}
-            </Heading>
-            {checklist.can_close ? (
-              <Text type="supporting">Closing seals a snapshot you can't change.</Text>
-            ) : (
-              <Badge variant="neutral" label={`Closable from ${dayLabel(checklist.closable_from)}`} />
-            )}
-          </VStack>
-          <Section>
-            <List hasDividers edge="flush" data-testid="checklist">
-              {checklist.items.map((item) => (
-                <ChecklistRow key={item.id} item={item} onFix={(a) => router.history.push(routeFor(a))} />
-              ))}
-            </List>
-          </Section>
-          <VStack className="sticky bottom-[calc(var(--tabbar-h)+env(safe-area-inset-bottom)+1rem)] lg:bottom-6">
-            <Button
-              width="full"
-              variant="primary"
-              size="lg"
-              disabled={!checklist.can_close}
-              loading={closing}
-              onClick={async () => {
-                setClosing(true);
-                try {
-                  await enqueue("closeMonth", { month });
-                } finally {
-                  setClosing(false);
-                }
-              }}
-            >
-              Close {monthName(month)}
-            </Button>
-          </VStack>
-        </>
-      )}
 
+          {closed ? (
+            <VStack gap={4} hAlign="center" data-testid="sealed">
+              <motion.span
+                initial={reduce ? false : { scale: 0.5, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+                className="grid size-16 place-items-center rounded-full bg-pos-soft text-pos"
+              >
+                <Check aria-hidden />
+              </motion.span>
+              <Badge
+                variant={record?.closed_at ? "success" : "info"}
+                label={record?.closed_at ? `Sealed ${dayLabel(record.closed_at.slice(0, 10))}` : "Sealing"}
+                icon={<Lock aria-hidden />}
+              />
+              {record?.snapshot_sha256 ? (
+                <Text type="code" color="secondary" maxLines={1}>
+                  sha256 {record.snapshot_sha256}
+                </Text>
+              ) : null}
+              <HStack gap={2}>
+                <Button
+                  variant="secondary"
+                  disabled={!record?.snapshot_key}
+                  onClick={async () => {
+                    const json = await api<unknown>(API.snapshot.replace(":month", month));
+                    setSnapshot(JSON.stringify(json, null, 2));
+                  }}
+                >
+                  View snapshot
+                </Button>
+                <Button variant="danger" onClick={() => setReopen(true)}>
+                  Reopen
+                </Button>
+              </HStack>
+            </VStack>
+          ) : (
+            <List hasDividers edge="flush" data-testid="checklist">
+              {checklist.items.some((i) => i.ok) ? (
+                <ListItem
+                  startContent={<Check className="text-pos" aria-hidden />}
+                  label={
+                    <Text color="secondary">{checklist.items.filter((i) => i.ok).length} checks passed</Text>
+                  }
+                />
+              ) : null}
+              {checklist.items
+                .filter((i) => !i.ok)
+                .map((item) => (
+                  <ChecklistRow
+                    key={item.id}
+                    item={item}
+                    onFix={(a) => {
+                      router.history.push(routeFor(a));
+                      onOpenChange(false);
+                    }}
+                  />
+                ))}
+            </List>
+          )}
+        </VStack>
+      </Sheet>
       <Sheet
         open={snapshot !== null}
         onOpenChange={(o) => !o && setSnapshot(null)}

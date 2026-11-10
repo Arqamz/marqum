@@ -1,10 +1,11 @@
 import type { AccountId, Category, Goal } from "@marqum/schema";
 import { monthPulse } from "./analytics.ts";
-import { numericSetting, setting, trackingStartMonth } from "./dataset.ts";
+import { setting, trackingStartMonth } from "./dataset.ts";
 import {
   averageMonths,
   categoryAverage,
   categoryMonthlySpend,
+  categoryRunRate,
   firstDataMonth,
   goalEta,
   goalSaved,
@@ -12,6 +13,7 @@ import {
   liveTxns,
   loanStatuses,
   monthlyEquivalent,
+  monthlyIncome,
   nextContributionMonth,
   nextPaymentMonth,
   openLoans,
@@ -54,10 +56,13 @@ function basePlan(
   ds: Dataset,
   cat: Category,
   month: string,
+  now: string,
 ): { amount: number; source: PlannedCategory["source"] } {
   if (cat.budget != null) return { amount: cat.budget, source: "budget" };
   const avg = categoryAverage(ds, cat.id, month).average;
   if (avg !== null) return { amount: avg, source: "average" };
+  const est = categoryRunRate(ds, cat.id, now);
+  if (est > 0) return { amount: est, source: "estimate" };
   return { amount: 0, source: "none" };
 }
 
@@ -81,13 +86,13 @@ export function plannedCategories(ds: Dataset, now: string, levers: Lever[] = []
     .filter((c) => c.parent_id === null)
     .sort((a, b) => a.sort - b.sort || a.id.localeCompare(b.id))
     .map((c) => {
-      const base = basePlan(ds, c, month);
+      const base = basePlan(ds, c, month, now);
       const ids = subtreeIds(ds, c.id);
       let planned = base.amount;
       for (const l of levers) {
         if (!ids.has(l.category_id)) continue;
         const target = cats.find((x) => x.id === l.category_id);
-        const t = l.category_id === c.id || !target ? base.amount : basePlan(ds, target, month).amount;
+        const t = l.category_id === c.id || !target ? base.amount : basePlan(ds, target, month, now).amount;
         planned += (t * l.pct) / 100;
       }
       planned = Math.max(0, Math.round(planned));
@@ -124,7 +129,7 @@ function modelParts(ds: Dataset, now: string, levers: Lever[] = []): ModelParts 
     else variableCats.push(row);
   }
   return {
-    income: Math.round(numericSetting(ds, "income_monthly")),
+    income: monthlyIncome(ds, now).amount,
     recurring: activeRecurring(ds).map((r) => ({
       account_id: r.account_id,
       name: r.name,
@@ -247,15 +252,10 @@ export function suggestedSplit(ds: Dataset, now: string): SplitSuggestion {
   return { sadapay, nayapay, lines };
 }
 
-/** How income is split between the wallets: the user's setting `allocation_sadapay` if set, else the suggestion. */
+/** How income should be split between the wallets: always the suggestion (nothing to save or maintain). */
 export function allocation(ds: Dataset, now: string): Allocation {
-  const income = Math.round(numericSetting(ds, "income_monthly"));
+  const income = monthlyIncome(ds, now).amount;
   const suggested = suggestedSplit(ds, now);
-  const raw = setting(ds, "allocation_sadapay");
-  if (/^\d+$/.test(raw)) {
-    const sadapay = Math.min(Number(raw), income);
-    return { income, sadapay, nayapay: income - sadapay, source: "user", suggested };
-  }
   return { income, sadapay: suggested.sadapay, nayapay: suggested.nayapay, source: "suggested", suggested };
 }
 
@@ -282,8 +282,8 @@ export function savingsHistory(ds: Dataset, now: string): SavingsHistory {
       saved.set(m, (saved.get(m) ?? 0) + t.amount);
       if (t.flow === "income" || t.flow === "funding") paid.add(m);
     }
-    // a month with no pay recorded (statement missing the salary) counts your set income
-    const income = Math.round(numericSetting(ds, "income_monthly"));
+    // a month with no pay recorded (statement missing the transfer) counts your usual income
+    const income = monthlyIncome(ds, now).amount;
     const list = months.map((m) => ({
       month: m,
       saved: (saved.get(m) ?? 0) + (paid.has(m) ? 0 : income),
@@ -295,11 +295,18 @@ export function savingsHistory(ds: Dataset, now: string): SavingsHistory {
       basis: "history",
     };
   }
-  const income = Math.round(numericSetting(ds, "income_monthly"));
+  const income = monthlyIncome(ds, now).amount;
   if (income <= 0) return { months: [], average: null, basis: "none" };
   const pulse = monthPulse(ds, current, now);
   const saved = income - pulse.projected;
-  return { months: [{ month: current, saved, partial: true }], average: saved, basis: "estimate" };
+  return {
+    months: [{ month: current, saved, partial: true }],
+    average: saved,
+    basis: "estimate",
+    income,
+    spend: pulse.projected,
+    per_day: pulse.per_day,
+  };
 }
 
 // ───────────────────────── forecast ─────────────────────────
@@ -763,3 +770,4 @@ export function whatIf(ds: Dataset, input: WhatIfInput, now: string): WhatIfResu
     surplus: S,
   };
 }
+export { daysTracked, incomeIn, monthlyIncome } from "./ledger.ts";

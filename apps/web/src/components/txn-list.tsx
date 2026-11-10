@@ -3,27 +3,72 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { List, ListItem } from "@astryxdesign/core/List";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
-import { formatRs } from "@marqum/core";
+import { dayLabel, formatRs } from "@marqum/core";
 import type { Transaction } from "@marqum/schema";
-import { CornerDownRight, CornerUpRight, Lock } from "lucide-react";
+import {
+  ArrowDownLeft,
+  ArrowLeftRight,
+  ArrowUpRight,
+  CornerDownRight,
+  CornerUpRight,
+  Lock,
+} from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import { useMemo } from "react";
+import { type ReactNode, useMemo } from "react";
 import { cn } from "../lib/cn.ts";
 import { opt } from "../lib/opt.ts";
 import { categoryPath, dayHeading, type Lookup, timeOf, topCategoryOf, txnTitle } from "../lib/view.ts";
+import { WalletLogo } from "./brand-logo.tsx";
 import { CategoryIcon, categoryTint } from "./category-icon.tsx";
 import { Money } from "./money.tsx";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
+/** The wallet as a small brand-coloured logo on the tile's corner, so rows don't spell it out. */
+function WalletDot({ id }: { id: Transaction["account_id"] }) {
+  return (
+    <span
+      className={cn(
+        "absolute -right-0.5 -bottom-0.5 grid size-4 place-items-center rounded-full ring-2 ring-bg",
+        id === "sadapay"
+          ? "bg-[var(--brand-sadapay)] text-[var(--brand-sadapay-ink)]"
+          : "bg-[var(--brand-nayapay)] text-[var(--brand-nayapay-ink)]",
+      )}
+    >
+      <WalletLogo id={id} size={10} />
+    </span>
+  );
+}
+
+/** Direction at a glance: in (green ↙), out (muted ↗), between own wallets (⇄). */
+function Amount({ t }: { t: Transaction }) {
+  const internal = t.flow === "internal";
+  const inflow = !internal && t.amount > 0;
+  const Icon = internal ? ArrowLeftRight : inflow ? ArrowDownLeft : ArrowUpRight;
+  return (
+    <HStack gap={1} vAlign="center">
+      <Icon
+        size={14}
+        className={cn("shrink-0", inflow ? "text-pos" : "text-fg-subtle")}
+        aria-label={internal ? "Between wallets" : inflow ? "In" : "Out"}
+      />
+      <Money
+        value={t.amount}
+        sign={t.amount > 0}
+        className="font-medium"
+        {...opt({ tone: inflow ? ("pos" as const) : internal ? ("muted" as const) : undefined })}
+      />
+    </HStack>
+  );
+}
+
 /**
  * Bookkeeping rows (flow "carry"): every month opens with "Balance brought forward" and, once closed, ends with
  * "Balance carried forward", so each month runs from 0 to 0. Muted, not spending, not taggable.
  */
-export function LedgerRow({ t, l }: { t: Transaction; l: Lookup }) {
+export function LedgerRow({ t }: { t: Transaction }) {
   const forward = t.amount >= 0 && !/carried/i.test(t.description);
   const Icon = forward ? CornerDownRight : CornerUpRight;
-  const wallet = l.account.get(t.account_id) ?? t.account_id;
   const m = /(?:brought|carried) forward\s+(from|to)\s+(.+)$/i.exec(t.description);
   const title = forward ? "Balance brought forward" : "Balance carried forward";
   const where = m ? `${m[1]?.toLowerCase()} ${m[2]}` : null;
@@ -31,10 +76,11 @@ export function LedgerRow({ t, l }: { t: Transaction; l: Lookup }) {
     <ListItem
       data-testid="ledger-row"
       label={title}
-      description={[where, wallet].filter(Boolean).join(" · ")}
+      {...opt({ description: where ?? undefined })}
       startContent={
-        <span className="grid size-10 place-items-center text-fg-muted">
+        <span className="relative grid size-10 place-items-center text-fg-muted">
           <Icon aria-hidden />
+          <WalletDot id={t.account_id} />
         </span>
       }
       endContent={<Money value={t.amount} sign={t.amount > 0} tone="muted" />}
@@ -42,43 +88,32 @@ export function LedgerRow({ t, l }: { t: Transaction; l: Lookup }) {
   );
 }
 
-export function TxnRow({
-  t,
-  l,
-  onOpen,
-  closed,
-}: {
+type RowProps = {
   t: Transaction;
   l: Lookup;
   onOpen: (t: Transaction) => void;
   closed?: boolean | undefined;
-}) {
-  if (t.flow === "carry") return <LedgerRow t={t} l={l} />;
-  return <EntryRow t={t} l={l} onOpen={onOpen} closed={closed} />;
+  /** "Paid back" / "Pays back" when the other half of a reimbursement isn't in view. */
+  link?: string | undefined;
+  /** Replaces the time (e.g. a payback grouped under an expense from another day). */
+  stamp?: string | undefined;
+};
+
+export function TxnRow(props: RowProps) {
+  if (props.t.flow === "carry") return <LedgerRow t={props.t} />;
+  return <EntryRow {...props} />;
 }
 
-function EntryRow({
-  t,
-  l,
-  onOpen,
-  closed,
-}: {
-  t: Transaction;
-  l: Lookup;
-  onOpen: (t: Transaction) => void;
-  closed?: boolean | undefined;
-}) {
+function EntryRow({ t, l, onOpen, closed, link, stamp }: RowProps) {
   const reduce = useReducedMotion();
   const top = topCategoryOf(t.category_id, l);
   const path = categoryPath(t.category_id, l);
   const warm = t.status === "provisional";
   const disputed = t.status === "disputed";
-  const wallet = l.account.get(t.account_id) ?? t.account_id;
   const title = txnTitle(t, l);
   const sub = [
     t.reason && t.reason !== title ? t.reason : null,
     path ?? (t.flow === "spend" ? "Untagged" : null),
-    wallet,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -104,7 +139,7 @@ function EntryRow({
       startContent={
         <span
           className={cn(
-            "grid size-10 place-items-center rounded-full",
+            "relative grid size-10 place-items-center rounded-full",
             top
               ? categoryTint(top.id)
               : t.amount > 0
@@ -122,23 +157,21 @@ function EntryRow({
           >
             <CategoryIcon name={top?.icon ?? (t.amount > 0 ? "banknote" : "circle")} />
           </motion.span>
+          <WalletDot id={t.account_id} />
         </span>
       }
       endContent={
         <VStack gap={0.5} hAlign="end">
-          <Money
-            value={t.amount}
-            sign={t.amount > 0}
-            className="font-medium"
-            {...opt({ tone: t.amount > 0 ? ("pos" as const) : undefined })}
-          />
+          <Amount t={t} />
           {disputed ? (
             <Badge label="Not on statement" variant="error" />
           ) : warm ? (
             <Badge label="Unverified" variant="warning" />
+          ) : link ? (
+            <Badge label={link} variant="neutral" />
           ) : (
             <Text type="supporting" hasTabularNumbers>
-              {timeOf(t.occurred_at)}
+              {stamp ?? timeOf(t.occurred_at)}
             </Text>
           )}
         </VStack>
@@ -147,29 +180,75 @@ function EntryRow({
   );
 }
 
-/** Rows grouped by day, newest first, each day with its spend. */
+/** A reimbursement pointing back at an expense. */
+const paysBack = (t: Transaction): t is Transaction & { linked_txn_id: string } =>
+  t.flow === "reimbursement" && t.linked_txn_id !== null;
+
+type Segment =
+  | { kind: "rows"; rows: Transaction[] }
+  | { kind: "pair"; expense: Transaction; paybacks: Transaction[] };
+
+/**
+ * Rows grouped by day, newest first, each day with its spend. With `links` (every transaction), a payback and the
+ * expense it repays share one outlined box at the expense's position; a half whose partner is out of view gets a
+ * "Paid back" / "Pays back" badge instead.
+ */
 export function TxnList({
   txns,
   l,
   onOpen,
   isClosedMonth,
   now,
+  links,
 }: {
   txns: Transaction[];
   l: Lookup;
   onOpen: (t: Transaction) => void;
   isClosedMonth?: (month: string) => boolean;
   now: string;
+  links?: Transaction[];
 }) {
-  const days = useMemo(() => {
-    const sorted = [...txns].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+  const { days, pairs, repaid } = useMemo(() => {
+    const visible = new Set(txns.map((t) => t.id));
+    const pairs = new Map<string, Transaction[]>();
+    const tucked = new Set<string>();
+    if (links)
+      for (const t of txns)
+        if (paysBack(t) && visible.has(t.linked_txn_id)) {
+          pairs.set(t.linked_txn_id, [...(pairs.get(t.linked_txn_id) ?? []), t]);
+          tucked.add(t.id);
+        }
+    const repaid = new Set((links ?? []).filter(paysBack).map((t) => t.linked_txn_id));
+    const sorted = txns
+      .filter((t) => !tucked.has(t.id))
+      .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
     const map = new Map<string, Transaction[]>();
     for (const t of sorted) {
       const d = t.occurred_at.slice(0, 10);
       map.set(d, [...(map.get(d) ?? []), t]);
     }
-    return [...map.entries()];
-  }, [txns]);
+    return { days: [...map.entries()], pairs, repaid };
+  }, [txns, links]);
+
+  const row = (t: Transaction, extra: { link?: string | undefined; stamp?: string | undefined } = {}) => (
+    <TxnRow
+      key={t.id}
+      t={t}
+      l={l}
+      onOpen={onOpen}
+      closed={isClosedMonth?.(t.occurred_at.slice(0, 7))}
+      {...extra}
+    />
+  );
+  const linkOf = (t: Transaction): string | undefined =>
+    !links || pairs.has(t.id)
+      ? undefined
+      : paysBack(t)
+        ? "Pays back"
+        : repaid.has(t.id)
+          ? "Paid back"
+          : undefined;
+
   return (
     <VStack gap={6} data-testid="txn-list">
       {days.map(([day, rows]) => {
@@ -177,6 +256,16 @@ export function TxnList({
           (s, t) => s + (t.amount < 0 && (t.flow === "spend" || t.flow === "fee") ? t.amount : 0),
           0,
         );
+        const segments: Segment[] = [];
+        for (const t of rows) {
+          const paybacks = pairs.get(t.id);
+          if (paybacks) segments.push({ kind: "pair", expense: t, paybacks });
+          else {
+            const last = segments.at(-1);
+            if (last?.kind === "rows") last.rows.push(t);
+            else segments.push({ kind: "rows", rows: [t] });
+          }
+        }
         return (
           <VStack as="section" key={day} gap={1}>
             <HStack justify="between" vAlign="center">
@@ -189,20 +278,55 @@ export function TxnList({
                 </Text>
               ) : null}
             </HStack>
-            <List>
-              {rows.map((t) => (
-                <TxnRow
-                  key={t.id}
-                  t={t}
-                  l={l}
-                  onOpen={onOpen}
-                  closed={isClosedMonth?.(t.occurred_at.slice(0, 7))}
-                />
-              ))}
-            </List>
+            {segments.map(
+              (seg): ReactNode =>
+                seg.kind === "rows" ? (
+                  <List key={seg.rows[0]?.id}>{seg.rows.map((t) => row(t, { link: linkOf(t) }))}</List>
+                ) : (
+                  <PairBox key={seg.expense.id} expense={seg.expense} paybacks={seg.paybacks}>
+                    {row(seg.expense)}
+                    {seg.paybacks.map((p) =>
+                      row(p, {
+                        stamp:
+                          p.occurred_at.slice(0, 10) === day
+                            ? undefined
+                            : dayLabel(p.occurred_at.slice(0, 10)),
+                      }),
+                    )}
+                  </PairBox>
+                ),
+            )}
           </VStack>
         );
       })}
+    </VStack>
+  );
+}
+
+/** An expense and the payback(s) for it, boxed together with what it cost in the end. */
+function PairBox({
+  expense,
+  paybacks,
+  children,
+}: {
+  expense: Transaction;
+  paybacks: Transaction[];
+  children: ReactNode;
+}) {
+  const net = expense.amount + paybacks.reduce((s, p) => s + p.amount, 0);
+  return (
+    <VStack
+      gap={0}
+      paddingBlockEnd={2}
+      className="rounded-container border border-border"
+      data-testid="txn-pair"
+    >
+      <List>{children}</List>
+      <HStack justify="end" paddingInline={4}>
+        <Text type="supporting" hasTabularNumbers>
+          Net {formatRs(net, { sign: true })}
+        </Text>
+      </HStack>
     </VStack>
   );
 }

@@ -193,3 +193,14 @@
   outline: 1.5px dashed var(--border-strong);
   outline-offset: -1.5px;
 }
+
+/* Scrolling something into view (focus, links, tests) clears the fixed top bar and bottom tab bar. */
+html {
+  scroll-padding-top: calc(var(--topbar-h) + env(safe-area-inset-top));
+  scroll-padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 1rem);
+}
+@media (min-width: 1024px) {
+  html {
+    scroll-padding-bottom: 1rem;
+  }
+}

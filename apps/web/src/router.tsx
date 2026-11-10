@@ -68,7 +68,13 @@ const close = createRoute({
   validateSearch: monthSearch,
   component: function Close() {
     const { month } = close.useSearch();
-    return <CloseScreen {...(month ? { month } : {})} />;
+    // No longer a tab: old links get Home with the close sheet open.
+    return (
+      <>
+        <HomeScreen />
+        <CloseScreen {...(month ? { month } : {})} />
+      </>
+    );
   },
 });
 const settings = createRoute({ getParentRoute: () => root, path: "/settings", component: SettingsScreen });

@@ -4,7 +4,6 @@ import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { List, ListItem } from "@astryxdesign/core/List";
-import { ProgressBar } from "@astryxdesign/core/ProgressBar";
 import { Selector } from "@astryxdesign/core/Selector";
 import { StackItem } from "@astryxdesign/core/Stack";
 import { proportional, Table, type TableColumn } from "@astryxdesign/core/Table";
@@ -18,6 +17,7 @@ import {
   type ForecastAssumptions,
   formatRs,
   monthLabel,
+  monthlyIncome,
   monthOf,
   parseRs,
   type SavingsHistory,
@@ -69,7 +69,7 @@ export function WhatIfCard({ ds, now }: { ds: Dataset; now: string }) {
           {c ? <Badge variant={c.badge} label={c.label} data-testid="what-if-verdict" /> : null}
         </HStack>
         <MoneyInput label="Price" hideLabel value={price} onChange={setPrice} />
-        <SavingsBasis savings={savings} surplus={result?.surplus ?? null} />
+        <SavingsBasis savings={savings} />
         {result ? (
           <Button
             variant="secondary"
@@ -87,18 +87,18 @@ export function WhatIfCard({ ds, now }: { ds: Dataset; now: string }) {
 }
 
 /**
- * What the verdict stands on: what SadaPay + NayaPay together actually kept each recent month, and the average.
- * The first month (no complete month yet) shows an estimate: income − spending so far at today's pace.
+ * What the verdict stands on, as plain arithmetic: your monthly saving across both wallets. Complete months are
+ * listed with what each kept; the first month shows income − spending at your daily rate.
  */
-export function SavingsBasis({ savings, surplus }: { savings: SavingsHistory; surplus: number | null }) {
+export function SavingsBasis({ savings }: { savings: SavingsHistory; surplus?: number | null }) {
   if (savings.basis === "none" || savings.average === null) return null;
-  const max = Math.max(1, ...savings.months.map((m) => Math.abs(m.saved)));
+  const k = (v: number) => formatRs(v, { compact: true });
   return (
     <Card variant="muted" padding={3} data-testid="savings-basis">
-      <VStack gap={2}>
+      <VStack gap={1}>
         <HStack justify="between" vAlign="center" gap={2}>
           <Text type="label">
-            {savings.basis === "estimate" ? "Saving this month (est.)" : "Avg saved / month"}
+            {savings.basis === "estimate" ? "You'll save this month" : "You save a month"}
           </Text>
           <Money
             value={savings.average}
@@ -106,31 +106,16 @@ export function SavingsBasis({ savings, surplus }: { savings: SavingsHistory; su
             className="font-semibold"
           />
         </HStack>
-        <VStack gap={1}>
-          {savings.months.map((m) => (
-            <HStack key={m.month} gap={2} vAlign="center">
-              <Text type="supporting" size="xsm" hasTabularNumbers>
-                {monthLabel(m.month).slice(0, 3)}
-                {m.partial ? "*" : ""}
-              </Text>
-              <StackItem size="fill">
-                <ProgressBar
-                  label={`${monthLabel(m.month)} saved`}
-                  isLabelHidden
-                  value={Math.max(0, m.saved)}
-                  max={max}
-                  variant={m.saved < 0 ? "error" : "success"}
-                />
-              </StackItem>
-              <Money value={m.saved} className="text-xs" tone={m.saved < 0 ? "neg" : "muted"} />
-            </HStack>
-          ))}
-        </VStack>
-        <Text type="supporting" size="xsm">
-          SadaPay + NayaPay combined
-          {surplus !== null ? ` · ${formatRs(surplus, { compact: true })}/mo free after goals & loans` : ""}
-          {savings.basis === "estimate" ? " · *so far, at today's pace" : ""}
-        </Text>
+        {savings.basis === "estimate" ? (
+          <Text type="supporting" hasTabularNumbers>
+            {k(savings.income ?? 0)} in − {k(savings.spend ?? 0)} spent ({k(savings.per_day ?? 0)}/day ×
+            month)
+          </Text>
+        ) : (
+          <Text type="supporting" hasTabularNumbers>
+            {savings.months.map((m) => `${monthLabel(m.month).slice(0, 3)} ${k(m.saved)}`).join(" · ")}
+          </Text>
+        )}
       </VStack>
     </Card>
   );
@@ -295,7 +280,7 @@ function WhatIfPlanner({ ds, now, initialPrice }: { ds: Dataset; now: string; in
 
       {result && c ? (
         <>
-          <SavingsBasis savings={result.savings} surplus={result.surplus} />
+          <SavingsBasis savings={result.savings} />
           <VStack gap={2} data-testid="what-if-outcome">
             <HStack gap={2} vAlign="center" wrap="wrap">
               <StackItem className={cn("transition-colors", c.tone)}>
@@ -460,7 +445,7 @@ function AssumptionsEditor({
           <Text weight="medium">Assumptions</Text>
           {open ? null : (
             <Text type="supporting" hasTabularNumbers>
-              {formatRs(incomeNow(ds, a), { compact: true })} in · spend {pct(a.spend_adjust_pct)} ·{" "}
+              {formatRs(incomeNow(ds, a, current), { compact: true })} in · spend {pct(a.spend_adjust_pct)} ·{" "}
               {a.uncertainty}
             </Text>
           )}
@@ -503,7 +488,7 @@ function AssumptionsEditor({
             onClick={() =>
               setA((x) => ({
                 ...x,
-                income: [...x.income, { from: addMonths(current, 6), amount: incomeNow(ds, x) }],
+                income: [...x.income, { from: addMonths(current, 6), amount: incomeNow(ds, x, current) }],
               }))
             }
           >
@@ -740,8 +725,9 @@ const pct = (v: number): string => (v === 0 ? "as usual" : `${v > 0 ? "+" : "−
 /** "Nov 26" */
 const shortMonth = (m: string): string => `${monthLabel(m).slice(0, 3)} ${m.slice(2, 4)}`;
 
-function incomeNow(ds: Dataset, a: ForecastAssumptions): number {
-  const base = Number(ds.settings.find((s) => s.id === "income_monthly")?.value ?? "8500000");
+function incomeNow(ds: Dataset, a: ForecastAssumptions, month: string): number {
+  // only the month matters to monthlyIncome
+  const base = monthlyIncome(ds, `${month}-01T12:00`).amount;
   return a.income.length > 0 ? (a.income.at(-1)?.amount ?? base) : base;
 }
 
