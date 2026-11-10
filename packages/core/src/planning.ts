@@ -308,6 +308,26 @@ export function savingsHistory(ds: Dataset, now: string): SavingsHistory {
   };
 }
 
+/**
+ * Is the debt a problem? Loan payments due each month vs what you have to spare (your average monthly saving
+ * across both wallets, before loan payments). A Rs 10k/month plan with Rs 40k to spare is fine; only when the
+ * payments outrun what you save does the app turn red.
+ */
+export function debtStatus(
+  ds: Dataset,
+  now: string,
+): { in_debt: boolean; payments: number; spare: number | null; affordable: boolean } {
+  const open = loanStatuses(ds, now).filter((l) => l.outstanding > 0);
+  const payments = open.reduce((s, l) => s + Math.min(l.loan.installment, l.outstanding), 0);
+  const spare = savingsHistory(ds, now).average;
+  return {
+    in_debt: open.length > 0,
+    payments,
+    spare,
+    affordable: open.length === 0 || (spare !== null && spare >= payments),
+  };
+}
+
 // ───────────────────────── forecast ─────────────────────────
 
 const DEFAULT_ASSUMPTIONS: ForecastAssumptions = {

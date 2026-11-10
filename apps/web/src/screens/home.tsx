@@ -12,6 +12,7 @@ import {
   categoryCards,
   type Dataset,
   dayLabel,
+  debtStatus,
   formatRs,
   monthLabel,
   monthLedger,
@@ -23,13 +24,13 @@ import {
   type WalletPosition,
 } from "@marqum/core";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowDownLeft, ArrowUpRight, Plus, TrendingDown, TrendingUp } from "lucide-react";
+import { ArrowDown, ArrowDownLeft, ArrowUp, ArrowUpRight, Plus } from "lucide-react";
 import { useMemo } from "react";
 import { WalletLogo } from "../components/brand-logo.tsx";
 import { CategoryTile } from "../components/category-icon.tsx";
 import { CloseBanner } from "../components/close-banner.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
-import { HeroAmount, Money, TweenMoney } from "../components/money.tsx";
+import { HeroAmount, TweenMoney } from "../components/money.tsx";
 import { openQuickAdd } from "../components/quick-add.tsx";
 import { Screen } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
@@ -45,6 +46,7 @@ export function HomeScreen() {
   const now = useNow();
   return (
     <Screen
+      glance
       actions={
         <Button size="icon" variant="ghost" label="Add a transaction" onClick={() => openQuickAdd()}>
           <Plus aria-hidden />
@@ -98,6 +100,8 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
   const np = useMemo(() => netPosition(ds, now), [ds, now]);
   const cards = useMemo(() => categoryCards(ds, month, now), [ds, month, now]);
   const pulse = useMemo(() => monthPulse(ds, month, now), [ds, month, now]);
+  const debt = useMemo(() => debtStatus(ds, now), [ds, now]);
+  const alarm = debt.in_debt && !debt.affordable;
   const unverified = useMemo(() => unverifiedSummary(ds), [ds]);
 
   const debtLine = useMemo(() => {
@@ -116,16 +120,24 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
 
   return (
     <VStack gap={6}>
+      <LandscapeGlance np={np} alarm={alarm} />
       <CloseBanner ds={ds} now={now} />
-      <VStack as="section" gap={2} hAlign="center" paddingBlockStart={4} data-testid="hero">
+      <VStack
+        as="section"
+        gap={2}
+        hAlign="center"
+        paddingBlockStart={4}
+        data-testid="hero"
+        className="phoneland:hidden"
+      >
         <Text type="label" color="secondary">
-          {np.in_debt ? "Net position · in debt" : "Net position"}
+          {alarm ? "Net position · debt you can't cover" : "Net position"}
         </Text>
         <HeroAmount
           value={np.net}
           className={cn(
             "text-hero font-semibold transition-colors",
-            np.in_debt || np.net < 0 ? "text-neg" : "text-fg",
+            alarm || np.net < 0 ? "text-neg" : "text-fg",
           )}
         />
         <HStack gap={2} hAlign="center" wrap="wrap" vAlign="center">
@@ -135,13 +147,19 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
           <Ticker value={pulse.vs_pace} label="your usual month by this day" suffix="vs usual" />
         </HStack>
         {debtLine ? (
-          <Text type="large" weight="semibold" justify="center" textWrap="balance" data-testid="debt-line">
-            <span className="text-neg">In debt · {debtLine}</span>
-          </Text>
+          alarm ? (
+            <Text type="large" weight="semibold" justify="center" textWrap="balance" data-testid="debt-line">
+              <span className="text-neg">In debt · {debtLine}</span>
+            </Text>
+          ) : (
+            <Text type="supporting" justify="center" textWrap="balance" data-testid="debt-line">
+              Loan · {debtLine}
+            </Text>
+          )
         ) : null}
       </VStack>
 
-      <Grid columns={2} gap={3} role="group" aria-label="Wallets">
+      <Grid columns={2} gap={3} role="group" aria-label="Wallets" className="phoneland:hidden">
         {np.wallets.map((w) => (
           <WalletCard key={w.account_id} ds={ds} w={w} month={month} now={now} />
         ))}
@@ -191,6 +209,43 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
 
       <WhatIfCard ds={ds} now={now} />
     </VStack>
+  );
+}
+
+/**
+ * A phone turned sideways: the screen fades to black and shows only the net position and the two wallets, full
+ * width and full height. Scrolling down reveals the rest of Home as usual.
+ */
+function LandscapeGlance({ np, alarm }: { np: ReturnType<typeof netPosition>; alarm: boolean }) {
+  return (
+    <section
+      aria-label="At a glance"
+      data-testid="landscape-glance"
+      className="animate-fade-in -mt-2 hidden min-h-dvh w-dvw flex-col items-center justify-center gap-6 bg-black text-white [margin-inline:calc(50%-50dvw)] phoneland:flex"
+    >
+      <span className="text-sm tracking-wide text-white/60 uppercase">Net position</span>
+      <HeroAmount
+        value={np.net}
+        className={cn("text-[min(18vh,7rem)] font-semibold", alarm || np.net < 0 ? "text-neg" : "text-white")}
+      />
+      <span className="flex gap-12">
+        {np.wallets.map((w) => (
+          <span key={w.account_id} className="flex items-center gap-3">
+            <span
+              className={cn(
+                "grid size-9 place-items-center rounded-full",
+                w.account_id === "sadapay"
+                  ? "bg-[var(--brand-sadapay)] text-[var(--brand-sadapay-ink)]"
+                  : "bg-[var(--brand-nayapay)] text-[var(--brand-nayapay-ink)]",
+              )}
+            >
+              <WalletLogo id={w.account_id} size={18} />
+            </span>
+            <TweenMoney value={w.balance} className="text-3xl font-semibold text-white" />
+          </span>
+        ))}
+      </span>
+    </section>
   );
 }
 
@@ -252,44 +307,51 @@ function WalletCard({ ds, w, month, now }: { ds: Dataset; w: WalletPosition; mon
 }
 
 /**
- * One glance: icon, ▲/▼ in the corner, name, amount, and a tiny month-end estimate. The card's own colour carries
- * the state — red when you're spending faster than usual by this day, green when slower, plain before there's a usual.
+ * One glance: icon and a ▲/▼ in the corner (vs the 3 months before; empty months count as 0), the name, the amount
+ * as big as the card allows, and a tiny month-end estimate. Red card = spending more than before, green = less.
  */
 function CategoryTileCard({ c, month }: { c: CategoryCard; month: string }) {
-  const state =
-    c.vs_pace === null ? "none" : c.vs_pace > 0.03 ? "over" : c.vs_pace < -0.03 ? "under" : "even";
-  const Arrow = state === "over" ? TrendingUp : state === "under" ? TrendingDown : null;
-  const pct = c.vs_pace === null ? null : Math.round(Math.abs(c.vs_pace) * 100);
+  const up = c.trend === "up";
+  const Arrow = up ? ArrowUp : ArrowDown;
+  const digits = formatRs(c.spent).replace(/^Rs\s?/, "");
   return (
     <Link
       to="/category/$id"
       params={{ id: c.category.id }}
       search={{ month }}
       data-testid="category-card"
-      data-state={state}
+      data-trend={c.trend}
       className="block min-w-0 rounded-container transition-transform active:scale-[0.98]"
     >
-      <Card
-        height="100%"
-        padding={3}
-        variant={state === "over" ? "red" : state === "under" ? "green" : "default"}
-      >
-        <VStack gap={1.5}>
+      <Card height="100%" padding={3} variant={up ? "red" : "green"}>
+        <VStack gap={1} className="@container">
           <HStack justify="between" vAlign="start">
             <CategoryTile id={c.category.id} name={c.category.icon} size="sm" />
-            {Arrow ? (
+            <span
+              className={cn(
+                "grid size-7 place-items-center rounded-full",
+                up ? "bg-error text-on-error" : "bg-success text-on-success",
+              )}
+            >
               <Arrow
-                size={18}
-                strokeWidth={2.5}
-                className={state === "over" ? "text-neg" : "text-pos"}
-                aria-label={`${pct}% ${state === "over" ? "above" : "below"} usual`}
+                size={16}
+                strokeWidth={3}
+                aria-label={`${up ? "More" : "Less"} than the last 3 months' average (${formatRs(c.avg3)})`}
               />
-            ) : null}
+            </span>
           </HStack>
           <Text type="label" maxLines={1} hasTruncateTooltip={false}>
             {c.category.name}
           </Text>
-          <Money value={c.spent} className="text-xl font-semibold" />
+          <span className="num flex items-baseline gap-1 leading-none font-semibold">
+            <span className="sr-only">{formatRs(c.spent)}</span>
+            <span aria-hidden className="text-sm font-medium opacity-70">
+              Rs
+            </span>
+            <span aria-hidden className="text-[clamp(1.75rem,19cqi,3.5rem)] tracking-tight">
+              {digits}
+            </span>
+          </span>
           {c.projected > c.spent ? (
             <Text type="supporting" size="3xs" hasTabularNumbers>
               ~{formatRs(c.projected, { compact: true })} by month end

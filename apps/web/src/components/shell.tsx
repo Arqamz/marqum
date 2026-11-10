@@ -8,7 +8,8 @@ import { ArrowLeft, ArrowLeftRight, House, Settings, Target } from "lucide-react
 import type { ReactNode } from "react";
 import { cn } from "../lib/cn.ts";
 import { useStore } from "../lib/store.ts";
-import { availableUpdate } from "../lib/updates.ts";
+import { availableUpdate, selfUpdateAllowed } from "../lib/updates.ts";
+import { MarqumNative } from "../native/marqum-native.ts";
 import { SyncDot } from "./sync-dot.tsx";
 import { Button } from "./ui/button.tsx";
 
@@ -41,8 +42,8 @@ export function Wordmark({ className }: { className?: string }) {
 /** Frame for every signed-in screen: top bar (safe-area aware), content column, tab bar / sidebar. */
 export function AppFrame({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-dvh lg:grid lg:grid-cols-[15rem_1fr]">
-      <aside className="sticky top-0 hidden h-dvh flex-col gap-8 border-border border-r px-4 py-6 lg:flex">
+    <div className="min-h-dvh desk:grid desk:grid-cols-[15rem_1fr]">
+      <aside className="sticky top-0 hidden h-dvh flex-col gap-8 border-border border-r px-4 py-6 desk:flex">
         <Wordmark className="px-2" />
         <nav className="flex flex-col gap-1" aria-label="Main">
           {NAV.map(({ to, label, icon: Icon }) => (
@@ -61,7 +62,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
       <div className="min-w-0">{children}</div>
       <nav
         aria-label="Main"
-        className="fixed inset-x-0 bottom-0 z-30 border-border border-t bg-surface pb-safe lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 border-border border-t bg-surface pb-safe desk:hidden phoneland:hidden"
       >
         <div className="mx-auto grid h-[var(--tabbar-h)] max-w-[var(--content-max)] grid-cols-4">
           {NAV.map(({ to, label, icon: Icon }) => (
@@ -90,7 +91,10 @@ export function Screen({
   actions,
   children,
   wide,
+  glance,
 }: {
+  /** Home: a sideways phone hides the top bar so the black glance screen fills it */
+  glance?: boolean;
   title?: string;
   back?: boolean;
   actions?: ReactNode;
@@ -99,9 +103,12 @@ export function Screen({
 }) {
   const router = useRouter();
   const update = useStore(availableUpdate);
+  const allowed = useStore(selfUpdateAllowed);
   return (
     <>
-      <header className="sticky top-0 z-20 bg-bg/95 pt-safe backdrop-blur">
+      <header
+        className={cn("sticky top-0 z-20 bg-bg/95 pt-safe backdrop-blur", glance && "phoneland:hidden")}
+      >
         <div
           className={cn(
             "mx-auto flex h-[var(--topbar-h)] items-center gap-2 px-safe",
@@ -113,7 +120,7 @@ export function Screen({
               <ArrowLeft aria-hidden />
             </Button>
           ) : (
-            <Wordmark className="lg:hidden" />
+            <Wordmark className="desk:hidden" />
           )}
           {title ? (
             <Text type="large" weight="semibold" maxLines={1}>
@@ -128,12 +135,29 @@ export function Screen({
       </header>
       <main
         className={cn(
-          "mx-auto flex flex-col gap-8 px-safe pt-2 pb-[calc(var(--tabbar-h)+env(safe-area-inset-bottom)+2rem)] lg:pb-12",
+          "mx-auto flex flex-col gap-8 px-safe pt-2 pb-[calc(var(--tabbar-h)+env(safe-area-inset-bottom)+2rem)] desk:pb-12",
           wide ? "max-w-5xl" : "max-w-[var(--content-max)]",
         )}
       >
         {update ? (
-          <Banner status="info" title={`Marqūm ${update} is out`} description="Update in Obtainium" />
+          allowed ? (
+            <Banner
+              status="info"
+              title={`Updating to ${update}…`}
+              description="Marqūm restarts when it's done"
+            />
+          ) : (
+            <Banner
+              status="info"
+              title={`Marqūm ${update} is out`}
+              description="Allow installs once; updates are automatic after that"
+              endContent={
+                <Button size="sm" variant="primary" onClick={() => void MarqumNative.requestSelfUpdate()}>
+                  Allow
+                </Button>
+              }
+            />
+          )
         ) : null}
         {children}
       </main>

@@ -199,7 +199,7 @@ html {
   scroll-padding-top: calc(var(--topbar-h) + env(safe-area-inset-top));
   scroll-padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 1rem);
 }
-@media (min-width: 1024px) {
+@media (min-width: 1024px) and (pointer: fine) {
   html {
     scroll-padding-bottom: 1rem;
   }
@@ -223,4 +223,18 @@ html[data-debt] [data-astryx-theme="marqum"] {
 }
 html[data-debt] body {
   background: #0a0a0b;
+}
+
+/* desk = a real desktop (wide + mouse) gets the sidebar; a phone on its side keeps the bottom bar. */
+@custom-variant desk (@media (min-width: 1024px) and (pointer: fine));
+/* phoneland = a phone turned sideways: Home becomes a black glance screen (net position + the two wallets). */
+@custom-variant phoneland (@media (orientation: landscape) and (max-height: 540px) and (pointer: coarse));
+
+@keyframes fade-to-black {
+  from {
+    opacity: 0;
+  }
+}
+@utility animate-fade-in {
+  animation: fade-to-black 450ms var(--ease-out) both;
 }

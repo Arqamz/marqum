@@ -114,6 +114,10 @@ export interface CategoryCard {
   baseline_source: "budget" | "average" | null;
   /** spent vs the baseline's same-day pace, as a fraction (+0.2 = 20% ahead); null without a baseline or pace */
   vs_pace: number | null;
+  /** mean of the 3 months before `month`; months with no data (even before tracking) count as 0 */
+  avg3: number;
+  /** spent vs avg3's same-day pace: up = more than usual (bullish spending), down = less */
+  trend: "up" | "down";
   /** share of this month's spend across all categories, 0..1 */
   share: number;
   /** month in progress: spend so far extended to the whole month at the same daily rate; else = spent */

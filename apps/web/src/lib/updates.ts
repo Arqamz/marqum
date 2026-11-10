@@ -3,6 +3,8 @@ import { isNative } from "./platform.ts";
 import { createStore } from "./store.ts";
 
 export const availableUpdate = createStore<string | null>(null);
+/** false when Android hasn't let Marqūm install its own updates yet (one-time "Install unknown apps"). */
+export const selfUpdateAllowed = createStore<boolean>(true);
 const KEY = "marqum.updateCheck";
 const RELEASES = "https://api.github.com/repos/Arqamz/marqum/releases/latest";
 
@@ -36,7 +38,12 @@ export async function checkForUpdate(): Promise<void> {
     }
     if (!tag) return;
     const { versionName } = await MarqumNative.getAppInfo();
-    if (newer(tag, versionName)) availableUpdate.set(tag.replace(/^v/, ""));
+    if (!newer(tag, versionName)) return;
+    availableUpdate.set(tag.replace(/^v/, ""));
+    const { granted } = await MarqumNative.canSelfUpdate();
+    selfUpdateAllowed.set(granted);
+    // installs in place; the app restarts on the new version
+    if (granted) await MarqumNative.updateNow();
   } catch {
     /* offline or rate-limited — try again tomorrow */
   }
