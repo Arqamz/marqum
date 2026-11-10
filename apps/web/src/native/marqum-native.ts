@@ -65,6 +65,11 @@ export interface MarqumNativePlugin {
 
   // ── App info ───────────────────────────────────────────────────────────────────────
   getAppInfo(): Promise<{ versionName: string; versionCode: number }>;
+  /** Checks GitHub releases and installs a newer, same-key APK (silently once install permission is granted). */
+  updateNow(): Promise<{ result: string }>;
+  canSelfUpdate(): Promise<{ granted: boolean }>;
+  /** Opens "Install unknown apps" for Marqūm (one-time). */
+  requestSelfUpdate(): Promise<void>;
 }
 
 export const MarqumNative = registerPlugin<MarqumNativePlugin>("MarqumNative");

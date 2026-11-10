@@ -109,6 +109,9 @@ export function categoryCards(ds: Dataset, month: string, now: string): Category
       spent: p.spent,
       average: p.average,
     }));
+    const avg3 = Math.round(
+      [1, 2, 3].reduce((sum, k) => sum + (monthly.get(addMonths(month, -k)) ?? 0), 0) / 3,
+    );
     const baseline = cat.budget ?? average;
     const basePace = baseline === null ? null : Math.round(baseline * dayFrac);
     cards.push({
@@ -122,6 +125,8 @@ export function categoryCards(ds: Dataset, month: string, now: string): Category
       baseline_source: cat.budget != null ? "budget" : average !== null ? "average" : null,
       vs_pace: basePace ? (spent - basePace) / basePace : null,
       projected: dayFrac > 0 && dayFrac < 1 ? Math.round(spent / dayFrac) : spent,
+      avg3,
+      trend: spent > avg3 * dayFrac ? "up" : "down",
       children,
     });
   }

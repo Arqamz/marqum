@@ -46,18 +46,26 @@ for (const scheme of ["light", "dark"] as const) {
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.getByRole("button", { name: /Skip/ }).click();
 
-    // Home: net position hero in debt mode with the loan line
+    // Home: an affordable loan stays calm — a plain loan line, no red, no debt mode
     const hero = page.getByTestId("hero");
     await expect(page.getByTestId("debt-line")).toContainText(
-      /In debt · owe Mom Rs 60,000 · clear by \w{3} 2027 at Rs 15,000\/month/,
+      /Loan · owe Mom Rs 60,000 · clear by \w{3} 2027 at Rs 15,000\/month/,
     );
-    await expect(hero.locator(".text-neg")).toHaveCount(2); // in debt: the net position and the debt line are red
-    await expect(page.locator("html")).toHaveAttribute("data-debt", "1");
+    await expect(hero.locator(".text-neg")).toHaveCount(0);
+    await expect(page.locator("html")).not.toHaveAttribute("data-debt", "1");
     await expect(page.getByTestId("unverified-banner")).toContainText("2 unverified");
     await expect(page.getByTestId("category-card").first()).toBeVisible();
     await expect(page.getByTestId("sync-state")).toHaveAttribute("data-status", "synced");
     await expect(page.getByTestId("sync-state").getByRole("button")).toHaveCount(0); // nothing shown when healthy
     await shot("home");
+    // Sideways: a black glance screen with the net position and both wallets
+    const portrait = page.viewportSize();
+    await page.setViewportSize({ width: 915, height: 412 });
+    await expect(page.getByTestId("landscape-glance")).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Main" }).first()).toBeHidden();
+    await page.waitForTimeout(600); // let the fade to black finish
+    await shot("home-landscape");
+    if (portrait) await page.setViewportSize(portrait);
 
     // Wallet detail: the month as an account, b/f → in → out → closing
     await page.getByTestId("wallet-nayapay").click();

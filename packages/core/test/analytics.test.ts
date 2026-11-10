@@ -220,6 +220,14 @@ describe("category cards & averages", () => {
     });
     expect(food(only)).toMatchObject({ baseline: null, vs_pace: null, share: 1 });
   });
+  it("trend: vs the 3 months before, empty months counting as 0 (so a brand-new category trends up)", () => {
+    // Aug–Oct food = 40k each → avg3 40k; 30k by the 15th vs 20k pace → up
+    expect(food(ds)).toMatchObject({ avg3: 40000, trend: "up" });
+    const only = withRows(seeded("2026-11-01"), {
+      transactions: [txn({ occurred_at: "2026-11-05T10:00", amount: -100, category_id: "food" })],
+    });
+    expect(food(only)).toMatchObject({ avg3: 0, trend: "up" });
+  });
   it("monthPulse: per day, and vs your usual month only once there is one", () => {
     const only = withRows(seeded("2026-11-01"), {
       transactions: [txn({ occurred_at: "2026-11-05T10:00", amount: -rsOf(30000), category_id: "food" })],

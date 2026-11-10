@@ -40,6 +40,37 @@ class MarqumNativePlugin : Plugin() {
         // The intent that launched the app (share / open-with while it wasn't running): queue for getPendingShares.
         val launch = activity?.intent
         io.execute { ShareInbox.enqueue(ShareInbox.extract(context, launch)) }
+        // Background self-update from GitHub releases every few hours, plus a check at every launch.
+        SelfUpdater.schedule(context)
+        SelfUpdater.checkNow(context)
+    }
+
+    /** Check GitHub for a newer release now and install it (no tap once install permission is granted). */
+    @PluginMethod
+    fun updateNow(call: PluginCall) {
+        io.execute {
+            try {
+                call.resolve(JSObject().put("result", SelfUpdater.run(context)))
+            } catch (e: Exception) {
+                call.reject(e.message ?: "update failed", "UPDATE_FAILED")
+            }
+        }
+    }
+
+    /** Whether Marqūm may install its own updates ("Install unknown apps"). */
+    @PluginMethod
+    fun canSelfUpdate(call: PluginCall) {
+        call.resolve(JSObject().put("granted", context.packageManager.canRequestPackageInstalls()))
+    }
+
+    @PluginMethod
+    fun requestSelfUpdate(call: PluginCall) {
+        val intent = Intent(
+            android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            android.net.Uri.parse("package:${context.packageName}"),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        call.resolve()
     }
 
     override fun handleOnNewIntent(intent: Intent?) {

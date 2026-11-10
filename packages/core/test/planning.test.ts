@@ -3,6 +3,7 @@ import { applyMutations } from "../src/dataset.ts";
 import {
   allocation,
   budgetModel,
+  debtStatus,
   defaultAssumptions,
   goalStatus,
   loanStatus,
@@ -421,6 +422,18 @@ describe("income and the first month's estimates", () => {
     // 7,000 over 15 days → 30-day month
     expect(p.find((c) => c.category_id === "food")).toMatchObject({ planned: rs(14000), source: "estimate" });
     expect(p.find((c) => c.category_id === "bills")).toMatchObject({ planned: rs(5000), source: "estimate" });
+  });
+});
+
+describe("debtStatus", () => {
+  it("a loan is only a problem when its payments outrun what you save", () => {
+    const d = debtStatus(fixture(), NOW);
+    expect(d.in_debt).toBe(true);
+    expect(d.payments).toBe(rs(9000));
+    expect(d.affordable).toBe((d.spare ?? -1) >= rs(9000));
+    const poor = set(fixture(), "income_monthly", String(rs(30000)));
+    expect(debtStatus(poor, NOW).affordable).toBe(false);
+    expect(debtStatus(seeded("2026-11-01"), NOW)).toMatchObject({ in_debt: false, affordable: true });
   });
 });
 
