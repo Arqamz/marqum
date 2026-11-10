@@ -1,10 +1,15 @@
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Icon } from "@astryxdesign/core/Icon";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { LocalNotifications } from "@capacitor/local-notifications";
 import { karachiNow, parseRs } from "@marqum/core";
-import { Bell, FolderOpen } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { Bell, FolderOpen, type LucideIcon } from "lucide-react";
+import { type FormEvent, useState } from "react";
 import { Wordmark } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
-import { Field, MoneyInput } from "../components/ui/input.tsx";
+import { MoneyInput } from "../components/ui/input.tsx";
 import { enqueue, newId } from "../lib/commands.ts";
 import { isNative } from "../lib/platform.ts";
 import { MarqumNative } from "../native/marqum-native.ts";
@@ -18,21 +23,21 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const step = steps[i] ?? "balances";
   const next = () => (i + 1 < steps.length ? setI(i + 1) : onDone());
   return (
-    <main className="mx-auto flex min-h-dvh max-w-sm flex-col gap-8 px-safe pt-safe pb-safe">
-      <div className="flex h-[var(--topbar-h)] items-center justify-between">
+    <VStack as="main" gap={8} className="mx-auto min-h-dvh max-w-sm px-safe pt-safe pb-safe">
+      <HStack vAlign="center" justify="between" className="h-[var(--topbar-h)]">
         <Wordmark />
         {steps.length > 1 ? (
-          <span className="num text-sm text-fg-muted">
+          <Text type="supporting" hasTabularNumbers>
             {i + 1} of {steps.length}
-          </span>
+          </Text>
         ) : null}
-      </div>
-      <div className="flex flex-1 flex-col justify-center gap-8 pb-8">
+      </HStack>
+      <VStack gap={8} justify="center" className="flex-1 pb-8">
         {step === "files" ? (
           <Permission
-            icon={<FolderOpen aria-hidden />}
-            title="Let statements import themselves"
-            body="Marqūm watches Downloads and NayaPay's statement folder for new statements and imports them after checking every total. Android calls this “All files access”."
+            icon={FolderOpen}
+            title="Auto-import statements"
+            body="Watches Downloads for new statements. Android calls this “All files access”."
             cta="Allow file access"
             onAllow={async () => {
               await MarqumNative.requestFileAccess().catch(() => undefined);
@@ -43,9 +48,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         ) : null}
         {step === "notifications" ? (
           <Permission
-            icon={<Bell aria-hidden />}
-            title="Log payments the moment they happen"
-            body="With notification access, NayaPay and SadaPay payment alerts become unverified entries within seconds. Only those two apps are read. Month-end reminders need notifications too."
+            icon={Bell}
+            title="Log payments instantly"
+            body="Reads NayaPay and SadaPay alerts only."
             cta="Allow notifications"
             onAllow={async () => {
               await LocalNotifications.requestPermissions().catch(() => undefined);
@@ -56,8 +61,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           />
         ) : null}
         {step === "balances" ? <Balances onDone={onDone} /> : null}
-      </div>
-    </main>
+      </VStack>
+    </VStack>
   );
 }
 
@@ -69,7 +74,7 @@ function Permission({
   onAllow,
   onSkip,
 }: {
-  icon: ReactNode;
+  icon: LucideIcon;
   title: string;
   body: string;
   cta: string;
@@ -78,19 +83,19 @@ function Permission({
 }) {
   return (
     <>
-      <div className="flex flex-col gap-4">
-        <span className="grid size-12 place-items-center rounded-full bg-surface-2">{icon}</span>
-        <h1 className="font-display text-headline font-medium">{title}</h1>
-        <p className="text-fg-muted">{body}</p>
-      </div>
-      <div className="flex flex-col gap-2">
-        <Button variant="primary" size="lg" onClick={onAllow}>
+      <VStack gap={4} hAlign="start">
+        <Icon icon={icon} size="lg" color="accent" />
+        <Heading level={1}>{title}</Heading>
+        <Text color="secondary">{body}</Text>
+      </VStack>
+      <VStack gap={2}>
+        <Button variant="primary" size="lg" width="full" onClick={onAllow}>
           {cta}
         </Button>
-        <Button variant="ghost" onClick={onSkip}>
+        <Button variant="ghost" width="full" onClick={onSkip}>
           Not now
         </Button>
-      </div>
+      </VStack>
     </>
   );
 }
@@ -101,9 +106,10 @@ function Balances({ onDone }: { onDone: () => void }) {
   const s = parseRs(sada);
   const n = parseRs(naya);
   return (
-    <form
-      className="flex flex-col gap-8"
-      onSubmit={(e) => {
+    <VStack
+      as="form"
+      gap={8}
+      onSubmit={(e: FormEvent) => {
         e.preventDefault();
         const at = karachiNow();
         if (s !== null)
@@ -113,29 +119,19 @@ function Balances({ onDone }: { onDone: () => void }) {
         onDone();
       }}
     >
-      <div className="flex flex-col gap-4">
-        <h1 className="font-display text-headline font-medium">What's in your wallets right now?</h1>
-        <p className="text-fg-muted">
-          Open each app and type the balance it shows. Statements take over from here; any gap shows up as
-          unaccounted.
-        </p>
-      </div>
-      <div className="flex flex-col gap-4">
-        <Field label="SadaPay">
-          <MoneyInput label="SadaPay balance" value={sada} onChange={setSada} />
-        </Field>
-        <Field label="NayaPay">
-          <MoneyInput label="NayaPay balance" value={naya} onChange={setNaya} />
-        </Field>
-      </div>
-      <div className="flex flex-col gap-2">
-        <Button type="submit" variant="primary" size="lg" disabled={s === null && n === null}>
+      <Heading level={1}>Today's balances</Heading>
+      <VStack gap={4}>
+        <MoneyInput label="SadaPay balance" value={sada} onChange={setSada} />
+        <MoneyInput label="NayaPay balance" value={naya} onChange={setNaya} />
+      </VStack>
+      <VStack gap={2}>
+        <Button type="submit" variant="primary" size="lg" width="full" disabled={s === null && n === null}>
           Start
         </Button>
-        <Button variant="ghost" onClick={onDone}>
-          Skip — I'll import statements first
+        <Button variant="ghost" width="full" onClick={onDone}>
+          Skip — import statements first
         </Button>
-      </div>
-    </form>
+      </VStack>
+    </VStack>
   );
 }

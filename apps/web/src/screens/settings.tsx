@@ -1,3 +1,15 @@
+import { Badge } from "@astryxdesign/core/Badge";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Icon } from "@astryxdesign/core/Icon";
+import { List, ListItem } from "@astryxdesign/core/List";
+import { Selector } from "@astryxdesign/core/Selector";
+import { StackItem } from "@astryxdesign/core/Stack";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import {
   addMonths,
   type Dataset,
@@ -15,15 +27,15 @@ import {
 } from "@marqum/core";
 import type { AccountId, NotificationIngest } from "@marqum/schema";
 import { API } from "@marqum/schema";
-import { Link } from "@tanstack/react-router";
-import { ChevronRight, Trash2 } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { Bell, Trash2, TriangleAlert } from "lucide-react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { BalanceSheet } from "../components/balance-sheet.tsx";
 import { CategoryIcon } from "../components/category-icon.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { Money } from "../components/money.tsx";
 import { openQuickAdd } from "../components/quick-add.tsx";
-import { Headline, Screen, Section } from "../components/shell.tsx";
+import { Headline, Screen } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Segmented, Skeleton, Switch } from "../components/ui/controls.tsx";
 import { Field, Input, MoneyInput } from "../components/ui/input.tsx";
@@ -31,6 +43,7 @@ import { Sheet } from "../components/ui/sheet.tsx";
 import { api } from "../lib/api.ts";
 import { auth } from "../lib/auth.ts";
 import { enqueue, newId } from "../lib/commands.ts";
+import { opt } from "../lib/opt.ts";
 import { isNative } from "../lib/platform.ts";
 import { biometricEnrolled, enrolBiometric, registerPasskey, stepUp } from "../lib/stepup.ts";
 import { reloadFromServer, resetLocalData } from "../lib/sync.ts";
@@ -47,29 +60,37 @@ export function SettingsScreen() {
   return (
     <Screen>
       <Headline>Settings</Headline>
-      {ds ? <SettingsContent ds={ds} now={now} /> : <Skeleton className="h-64 rounded-card" />}
+      {ds ? <SettingsContent ds={ds} now={now} /> : <Skeleton height={256} />}
     </Screen>
   );
 }
 
-function Row({ children, onClick }: { children: ReactNode; onClick?: (() => void) | undefined }) {
-  const cls = "flex min-h-12 w-full items-center justify-between gap-4 rounded-control px-3 py-2 text-left";
-  return onClick ? (
-    <button type="button" className={`${cls} hover:bg-surface-2`} onClick={onClick}>
-      {children}
-    </button>
-  ) : (
-    <div className={cls}>{children}</div>
+/** A settings group: heading, then a card of divided rows. */
+function Group({ title, children, after }: { title: string; children: ReactNode; after?: ReactNode }) {
+  return (
+    <VStack as="section" gap={3}>
+      <Heading level={2}>{title}</Heading>
+      <Card>
+        <List hasDividers edge="bleed">
+          {children}
+        </List>
+      </Card>
+      {after}
+    </VStack>
   );
 }
 
+const chevron = <Icon icon="chevronRight" color="secondary" size="sm" />;
+const on = <Badge label="On" variant="success" />;
+
 const OPENING_LABEL = {
-  statement: "from the statement",
-  you: "set by you",
-  none: "not set — type today's balance above",
+  statement: "From statement",
+  you: "Set by you",
+  none: "Not set",
 } as const;
 
 function SettingsContent({ ds, now }: { ds: Dataset; now: string }) {
+  const navigate = useNavigate();
   const np = useMemo(() => netPosition(ds, now), [ds, now]);
   const [balanceFor, setBalanceFor] = useState<AccountId | null>(null);
   const [rules, setRules] = useState(false);
@@ -86,130 +107,120 @@ function SettingsContent({ ds, now }: { ds: Dataset; now: string }) {
 
   return (
     <>
-      <Section title="Averages">
+      <VStack as="section" gap={3}>
+        <Heading level={2}>Averages</Heading>
         <Segmented
           label="Average over"
           value={windowSetting}
           onValueChange={(v) => void enqueue("setSetting", { key: "avg_window", value: v })}
           options={[
-            { value: "6", label: "Last 6 months" },
-            { value: "3", label: "Last 3 months" },
+            { value: "6", label: "6 months" },
+            { value: "3", label: "3 months" },
           ]}
         />
-      </Section>
+      </VStack>
 
-      <Section title="Wallet balances">
-        <div className="-mx-3 flex flex-col">
-          {np.wallets.map((w) => (
-            <div key={w.account_id} className="flex flex-col">
-              <Row onClick={() => setBalanceFor(w.account_id)}>
-                <span className="flex flex-col">
-                  <span>{w.name}</span>
-                  <span className="text-sm text-fg-muted">
-                    {w.verified_until ? `verified to ${dayLabel(w.verified_until)}` : "no statement yet"}
-                  </span>
-                </span>
-                <Money value={w.balance} className="font-medium" />
-              </Row>
-              <Row
-                {...(openingInfo(ds, w.account_id).source === "statement"
-                  ? {}
-                  : { onClick: () => setOpeningFor(w.account_id) })}
-              >
-                <span className="flex flex-col text-sm text-fg-muted">
-                  <span>Opening balance, 1 {monthLabel(firstMonth)}</span>
-                  <span className="text-fg-subtle">
-                    {OPENING_LABEL[openingInfo(ds, w.account_id).source]}
-                  </span>
-                </span>
-                <span className="flex items-center gap-2 text-sm text-fg-muted">
-                  <Money value={openings[w.account_id] ?? 0} />
-                  {openingInfo(ds, w.account_id).source === "statement" ? null : (
-                    <ChevronRight className="text-fg-subtle" aria-label="Set opening balance" />
-                  )}
-                </span>
-              </Row>
-              {w.unaccounted !== 0 ? (
-                <button
-                  type="button"
-                  className="mx-3 mb-2 self-start text-sm text-warn"
-                  onClick={() => openQuickAdd({ amount: w.unaccounted, account_id: w.account_id })}
-                >
-                  {formatRs(Math.abs(w.unaccounted))} unaccounted — add it?
-                </button>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      </Section>
+      <Group title="Wallets">
+        {np.wallets.flatMap((w) => {
+          const source = openingInfo(ds, w.account_id).source;
+          const rows = [
+            <ListItem
+              key={`${w.account_id}-balance`}
+              label={w.name}
+              description={
+                w.verified_until ? `Verified to ${dayLabel(w.verified_until)}` : "No statement yet"
+              }
+              endContent={<Money value={w.balance} className="font-medium" />}
+              onClick={() => setBalanceFor(w.account_id)}
+            />,
+            <ListItem
+              key={`${w.account_id}-opening`}
+              label={
+                <Text type="supporting" maxLines={1}>
+                  Opening balance, 1 {monthLabel(firstMonth)}
+                </Text>
+              }
+              description={OPENING_LABEL[source]}
+              endContent={
+                <HStack gap={1} vAlign="center">
+                  <Money value={openings[w.account_id] ?? 0} className="text-sm text-fg-muted" />
+                  {source === "statement" ? null : chevron}
+                </HStack>
+              }
+              {...opt({ onClick: source === "statement" ? undefined : () => setOpeningFor(w.account_id) })}
+            />,
+          ];
+          if (w.unaccounted !== 0)
+            rows.push(
+              <ListItem
+                key={`${w.account_id}-unaccounted`}
+                label={
+                  <Text weight="medium" className="text-warn">
+                    {formatRs(Math.abs(w.unaccounted))} unaccounted
+                  </Text>
+                }
+                startContent={<Icon icon={TriangleAlert} color="warning" size="sm" />}
+                endContent={<Text color="accent">Add</Text>}
+                onClick={() => openQuickAdd({ amount: w.unaccounted, account_id: w.account_id })}
+              />,
+            );
+          return rows;
+        })}
+      </Group>
 
-      <Section title="Categories and rules">
-        <div className="-mx-3 flex flex-col">
-          <Row onClick={() => setRules(true)}>
-            <span>
-              {ds.categories.filter((c) => c.parent_id === null && !c.hidden).length} categories ·{" "}
-              {ds.rules.length} rules
-            </span>
-            <ChevronRight className="text-fg-subtle" aria-hidden />
-          </Row>
-        </div>
-      </Section>
+      <Group title="Categories">
+        <ListItem
+          label="Categories and rules"
+          description={`${ds.categories.filter((c) => c.parent_id === null && !c.hidden).length} categories · ${ds.rules.length} rules`}
+          endContent={chevron}
+          onClick={() => setRules(true)}
+        />
+      </Group>
 
       <SecuritySection />
       {isNative() ? <PermissionsSection /> : null}
       <DevicesSection />
 
-      <Section title="Data">
-        <div className="-mx-3 flex flex-col">
-          <Row onClick={() => void exportAll()}>
-            <span>Export everything as JSON</span>
-            <ChevronRight className="text-fg-subtle" aria-hidden />
-          </Row>
-          <Row>
-            <Link to="/import" className="flex w-full items-center justify-between">
-              <span>Statements and imports</span>
-              <ChevronRight className="text-fg-subtle" aria-hidden />
-            </Link>
-          </Row>
-          <Row
-            onClick={async () => {
-              await reloadFromServer();
-              toast({ tone: "neutral", title: "Reloaded from the server" });
-            }}
-          >
-            <span className="flex flex-col">
-              <span>Reload from the server</span>
-              <span className="text-sm text-fg-muted">
-                Rebuilds this device's copy. Unsent changes are kept.
-              </span>
-            </span>
-          </Row>
-          <Row
-            onClick={async () => {
-              await auth.logout();
-              await resetLocalData();
-            }}
-          >
-            <span>Sign out of this device</span>
-          </Row>
-        </div>
-        <AppVersion />
-        {testRun ? <p className="text-sm text-fg-muted">{testRun}</p> : null}
-      </Section>
+      <Group
+        title="Data"
+        after={
+          <VStack gap={1}>
+            <AppVersion />
+            {testRun ? <Text type="supporting">{testRun}</Text> : null}
+          </VStack>
+        }
+      >
+        <ListItem label="Export as JSON" endContent={chevron} onClick={() => void exportAll()} />
+        <ListItem
+          label="Statements and imports"
+          endContent={chevron}
+          onClick={() => void navigate({ to: "/import" })}
+        />
+        <ListItem
+          label="Reload from the server"
+          description="Unsent changes are kept"
+          onClick={async () => {
+            await reloadFromServer();
+            toast({ tone: "neutral", title: "Reloaded from the server" });
+          }}
+        />
+        <ListItem
+          label="Sign out of this device"
+          onClick={async () => {
+            await auth.logout();
+            await resetLocalData();
+          }}
+        />
+      </Group>
 
-      <Section title="Danger zone">
-        <div className="-mx-3 flex flex-col">
-          <Row onClick={() => setResetOpen(true)}>
-            <span className="flex flex-col">
-              <span>Reset ledger…</span>
-              <span className="text-sm text-fg-muted">
-                Start tracking again from a new date. Categories, fixed charges, loans and goals stay.
-              </span>
-            </span>
-            <ChevronRight className="text-fg-subtle" aria-hidden />
-          </Row>
-        </div>
-      </Section>
+      <Group title="Danger zone">
+        <ListItem
+          label={<Text className="text-neg">Reset ledger…</Text>}
+          description="Start tracking from a new date"
+          endContent={chevron}
+          onClick={() => setResetOpen(true)}
+        />
+      </Group>
 
       <BalanceSheet ds={ds} account={balanceFor} onClose={() => setBalanceFor(null)} />
       <OpeningSheet ds={ds} account={openingFor} month={firstMonth} onClose={() => setOpeningFor(null)} />
@@ -241,7 +252,11 @@ function AppVersion() {
         .then((i) => setVersion(`${i.versionName} (${i.versionCode})`))
         .catch(() => undefined);
   }, []);
-  return <p className="px-0 text-sm text-fg-muted">Marqūm {version}</p>;
+  return (
+    <Text type="supporting" hasTabularNumbers>
+      Marqūm {version}
+    </Text>
+  );
 }
 
 function SecuritySection() {
@@ -250,55 +265,42 @@ function SecuritySection() {
     void biometricEnrolled().then(setEnrolled);
   }, []);
   return (
-    <Section title="Closed-month edits">
-      <div className="-mx-3 flex flex-col">
-        {isNative() ? (
-          <Row
-            onClick={async () => {
-              try {
-                if (await enrolBiometric()) setEnrolled(true);
-              } catch (e) {
-                toast({
-                  tone: "error",
-                  title: "Fingerprint setup failed",
-                  detail: e instanceof Error ? e.message : "",
-                });
-              }
-            }}
-          >
-            <span className="flex flex-col">
-              <span>Fingerprint</span>
-              <span className="text-sm text-fg-muted">
-                {enrolled ? "On — one touch to edit a closed month" : "Set up so you don't need the passcode"}
-              </span>
-            </span>
-            <ChevronRight className="text-fg-subtle" aria-hidden />
-          </Row>
-        ) : (
-          <Row
-            onClick={async () => {
-              try {
-                if (await registerPasskey()) toast({ tone: "success", title: "Passkey added" });
-              } catch (e) {
-                toast({
-                  tone: "error",
-                  title: "Passkey setup failed",
-                  detail: e instanceof Error ? e.message : "",
-                });
-              }
-            }}
-          >
-            <span className="flex flex-col">
-              <span>Add a passkey</span>
-              <span className="text-sm text-fg-muted">
-                Confirm closed-month edits with your device instead of the passcode
-              </span>
-            </span>
-            <ChevronRight className="text-fg-subtle" aria-hidden />
-          </Row>
-        )}
-      </div>
-    </Section>
+    <Group title="Closed-month edits">
+      {isNative() ? (
+        <ListItem
+          label="Fingerprint"
+          endContent={enrolled ? on : chevron}
+          onClick={async () => {
+            try {
+              if (await enrolBiometric()) setEnrolled(true);
+            } catch (e) {
+              toast({
+                tone: "error",
+                title: "Fingerprint setup failed",
+                detail: e instanceof Error ? e.message : "",
+              });
+            }
+          }}
+        />
+      ) : (
+        <ListItem
+          label="Add a passkey"
+          description="Skip the passcode"
+          endContent={chevron}
+          onClick={async () => {
+            try {
+              if (await registerPasskey()) toast({ tone: "success", title: "Passkey added" });
+            } catch (e) {
+              toast({
+                tone: "error",
+                title: "Passkey setup failed",
+                detail: e instanceof Error ? e.message : "",
+              });
+            }
+          }}
+        />
+      )}
+    </Group>
   );
 }
 
@@ -317,72 +319,59 @@ function PermissionsSection() {
   };
   useEffect(refresh, []);
   return (
-    <Section title="Hands-free">
-      <div className="-mx-3 flex flex-col">
-        <Row onClick={files ? undefined : () => void MarqumNative.requestFileAccess().then(refresh)}>
-          <span className="flex flex-col">
-            <span>Statement inbox</span>
-            <span className="text-sm text-fg-muted">
-              {files
-                ? "On — new statements in Downloads import themselves"
-                : "Allow file access to pick up statements"}
-            </span>
-          </span>
-          {files ? (
-            <span className="text-sm text-pos">On</span>
-          ) : (
-            <ChevronRight className="text-fg-subtle" aria-hidden />
-          )}
-        </Row>
-        <Row onClick={notifs ? undefined : () => void MarqumNative.requestNotificationAccess().then(refresh)}>
-          <span className="flex flex-col">
-            <span>Bank notifications</span>
-            <span className="text-sm text-fg-muted">
-              {notifs
-                ? "On — payments appear within seconds"
-                : "Allow notification access to log payments as they happen"}
-            </span>
-          </span>
-          {notifs ? (
-            <span className="text-sm text-pos">On</span>
-          ) : (
-            <ChevronRight className="text-fg-subtle" aria-hidden />
-          )}
-        </Row>
-        <Row
-          onClick={() => {
-            setShowHeard(true);
-            void MarqumNative.getCapturedNotifications({ limit: 50 }).then((r) => setHeard(r.items));
-          }}
-        >
-          <span>Notifications the app heard</span>
-          <ChevronRight className="text-fg-subtle" aria-hidden />
-        </Row>
-      </div>
+    <Group title="Hands-free">
+      <ListItem
+        label="Statement inbox"
+        description={files ? "Downloads import themselves" : "Needs file access"}
+        endContent={files ? on : chevron}
+        {...opt({ onClick: files ? undefined : () => void MarqumNative.requestFileAccess().then(refresh) })}
+      />
+      <ListItem
+        label="Bank notifications"
+        description={notifs ? "Payments log within seconds" : "Needs notification access"}
+        endContent={notifs ? on : chevron}
+        {...opt({
+          onClick: notifs ? undefined : () => void MarqumNative.requestNotificationAccess().then(refresh),
+        })}
+      />
+      <ListItem
+        label="Notifications the app heard"
+        endContent={chevron}
+        onClick={() => {
+          setShowHeard(true);
+          void MarqumNative.getCapturedNotifications({ limit: 50 }).then((r) => setHeard(r.items));
+        }}
+      />
       <Sheet open={showHeard} onOpenChange={setShowHeard} title="Notifications the app heard">
         {heard.length === 0 ? (
-          <p className="text-fg-muted">
-            Nothing yet. Make a payment in NayaPay or SadaPay and it shows up here.
-          </p>
+          <EmptyState title="Nothing yet" icon={<Bell aria-hidden />} isCompact />
         ) : (
-          <ul className="flex flex-col gap-4">
+          <List hasDividers>
             {heard.map((n) => (
-              <li key={n.id} className="flex flex-col gap-1">
-                <span className="flex justify-between text-sm text-fg-muted">
-                  <span>
-                    {n.package.includes("nayapay") ? "NayaPay" : "SadaPay"} ·{" "}
-                    {dayLabel(n.posted_at.slice(0, 10))} {n.posted_at.slice(11)}
-                  </span>
-                  <span className={n.sent ? "" : "text-warn"}>{n.sent ? "sent" : "queued"}</span>
-                </span>
-                <span className="font-medium">{n.title}</span>
-                <span className="font-mono text-sm text-fg-muted">{n.text}</span>
-              </li>
+              <ListItem
+                key={n.id}
+                label={n.title}
+                description={
+                  <VStack gap={0.5}>
+                    <Text type="supporting" hasTabularNumbers>
+                      {n.package.includes("nayapay") ? "NayaPay" : "SadaPay"} ·{" "}
+                      {dayLabel(n.posted_at.slice(0, 10))} {n.posted_at.slice(11)}
+                    </Text>
+                    <Text type="code" color="secondary">
+                      {n.text}
+                    </Text>
+                  </VStack>
+                }
+                align="start"
+                endContent={
+                  <Badge label={n.sent ? "sent" : "queued"} variant={n.sent ? "neutral" : "warning"} />
+                }
+              />
             ))}
-          </ul>
+          </List>
         )}
       </Sheet>
-    </Section>
+    </Group>
   );
 }
 
@@ -397,46 +386,53 @@ function DevicesSection() {
   useEffect(load, []);
   const me = auth.get();
   const myId = me.status === "signed-in" ? me.session.device_id : "";
+  if (devices === null)
+    return (
+      <VStack as="section" gap={3}>
+        <Heading level={2}>Devices</Heading>
+        <Skeleton height={48} />
+      </VStack>
+    );
+  if (devices.length === 0)
+    return (
+      <VStack as="section" gap={3}>
+        <Heading level={2}>Devices</Heading>
+        <Text type="supporting">Unavailable offline</Text>
+      </VStack>
+    );
   return (
-    <Section title="Devices">
-      {devices === null ? (
-        <Skeleton className="h-12" />
-      ) : devices.length === 0 ? (
-        <p className="text-sm text-fg-muted">Device list is unavailable offline.</p>
-      ) : (
-        <ul className="-mx-3 flex flex-col">
-          {devices.map((d) => (
-            <li key={d.id}>
-              <Row>
-                <span className="flex flex-col">
-                  <span>{d.name}</span>
-                  <span className="text-sm text-fg-muted">
-                    {d.id === myId || d.current
-                      ? "This device"
-                      : d.last_seen_at
-                        ? `last seen ${dayLabel(d.last_seen_at.slice(0, 10))}`
-                        : ""}
-                  </span>
-                </span>
-                {d.id === myId || d.current ? null : (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Sign out ${d.name}`}
-                    onClick={async () => {
-                      await api(`${API.devices}/${d.id}`, { method: "DELETE" });
-                      load();
-                    }}
-                  >
-                    <Trash2 aria-hidden />
-                  </Button>
-                )}
-              </Row>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Section>
+    <Group title="Devices">
+      {devices.map((d) => {
+        const mine = d.id === myId || d.current;
+        return (
+          <ListItem
+            key={d.id}
+            label={d.name}
+            {...opt({
+              description:
+                !mine && d.last_seen_at ? `Last seen ${dayLabel(d.last_seen_at.slice(0, 10))}` : undefined,
+            })}
+            endContent={
+              mine ? (
+                <Badge label="This device" variant="info" />
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Sign out ${d.name}`}
+                  onClick={async () => {
+                    await api(`${API.devices}/${d.id}`, { method: "DELETE" });
+                    load();
+                  }}
+                >
+                  <Trash2 aria-hidden />
+                </Button>
+              )
+            }
+          />
+        );
+      })}
+    </Group>
   );
 }
 
@@ -453,44 +449,53 @@ function RulesSheet({
   const [pattern, setPattern] = useState("");
   const [category, setCategory] = useState("");
   const tops = ds.categories.filter((c) => c.parent_id === null).sort((a, b) => a.sort - b.sort);
+  const options = ds.categories
+    .slice()
+    .sort((a, b) => (a.parent_id ?? a.id).localeCompare(b.parent_id ?? b.id) || a.sort - b.sort)
+    .map((c) => ({
+      value: c.id,
+      label: c.parent_id ? `${l.category.get(c.parent_id)?.name} › ${c.name}` : c.name,
+    }));
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title="Categories and rules">
-      <div className="flex flex-col gap-8">
-        <section className="flex flex-col gap-2">
-          <h3 className="font-medium">Categories</h3>
-          <p className="text-sm text-fg-muted">
-            Hidden categories stay out of Home until something is tagged with them.
-          </p>
-          <ul className="flex flex-col">
+      <VStack gap={8}>
+        <VStack as="section" gap={2}>
+          <Heading level={3}>Categories</Heading>
+          <Text type="supporting">Off = hidden from Home until used</Text>
+          <List hasDividers density="compact">
             {tops.map((c) => (
-              <li key={c.id} className="flex items-center gap-3 py-2">
-                <CategoryIcon name={c.icon} className="text-fg-muted" />
-                <span className="flex-1">{c.name}</span>
-                <Switch
-                  label={`Show ${c.name}`}
-                  checked={!c.hidden}
-                  onCheckedChange={(show) =>
-                    void enqueue("upsertCategory", {
-                      category_id: c.id,
-                      parent_id: c.parent_id,
-                      name: c.name,
-                      icon: c.icon,
-                      wallet_hint: c.wallet_hint,
-                      nature: c.nature,
-                      hidden: !show,
-                      sort: c.sort,
-                    })
-                  }
-                />
-              </li>
+              <ListItem
+                key={c.id}
+                label={c.name}
+                startContent={<CategoryIcon name={c.icon} className="text-fg-muted" />}
+                endContent={
+                  <Switch
+                    label={`Show ${c.name}`}
+                    checked={!c.hidden}
+                    onCheckedChange={(show) =>
+                      void enqueue("upsertCategory", {
+                        category_id: c.id,
+                        parent_id: c.parent_id,
+                        name: c.name,
+                        icon: c.icon,
+                        wallet_hint: c.wallet_hint,
+                        nature: c.nature,
+                        hidden: !show,
+                        sort: c.sort,
+                      })
+                    }
+                  />
+                }
+              />
             ))}
-          </ul>
-        </section>
-        <section className="flex flex-col gap-2">
-          <h3 className="font-medium">Rules</h3>
-          <form
-            className="flex flex-col gap-2"
-            onSubmit={(e) => {
+          </List>
+        </VStack>
+        <VStack as="section" gap={2}>
+          <Heading level={3}>Rules</Heading>
+          <VStack
+            as="form"
+            gap={2}
+            onSubmit={(e: FormEvent) => {
               e.preventDefault();
               if (!pattern.trim() || !category) return;
               void enqueue("upsertRule", {
@@ -504,65 +509,61 @@ function RulesSheet({
               setPattern("");
             }}
           >
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="Text matches">
-                <Input
-                  className="font-mono"
+            <HStack gap={2} vAlign="end">
+              <StackItem size="fill">
+                <TextInput
+                  label="Text matches"
                   value={pattern}
-                  onChange={(e) => setPattern(e.target.value)}
+                  onChange={setPattern}
                   placeholder="gym|creatine"
+                  controlClassName="font-mono"
+                  width="100%"
                 />
-              </Field>
-              <Field label="Tag as">
-                <select
-                  className="h-12 rounded-control border border-border bg-surface px-3"
+              </StackItem>
+              <StackItem size="fill">
+                <Selector
+                  label="Tag as"
+                  placeholder="Category"
+                  options={options}
                   value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                >
-                  <option value="">Category</option>
-                  {ds.categories
-                    .slice()
-                    .sort(
-                      (a, b) => (a.parent_id ?? a.id).localeCompare(b.parent_id ?? b.id) || a.sort - b.sort,
-                    )
-                    .map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.parent_id ? `  ${l.category.get(c.parent_id)?.name} › ${c.name}` : c.name}
-                      </option>
-                    ))}
-                </select>
-              </Field>
-            </div>
+                  onChange={(v) => setCategory(v)}
+                  hasSearch
+                  presentation="adaptive"
+                  width="100%"
+                />
+              </StackItem>
+            </HStack>
             <Button type="submit" variant="secondary" disabled={!pattern.trim() || !category}>
               Add rule
             </Button>
-          </form>
-          <ul className="flex flex-col">
+          </VStack>
+          <List hasDividers density="compact">
             {[...ds.rules]
               .sort((a, b) => b.priority - a.priority)
               .map((r) => (
-                <li key={r.id} className="flex items-center gap-3 py-2">
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm" title={r.pattern}>
-                      {describeRule(r.pattern)}
-                    </span>
-                    <span className="text-sm text-fg-muted">
-                      {r.category_id ? (l.category.get(r.category_id)?.name ?? r.category_id) : r.flow}
-                    </span>
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Delete rule"
-                    onClick={() => void enqueue("deleteRule", { rule_id: r.id })}
-                  >
-                    <Trash2 aria-hidden />
-                  </Button>
-                </li>
+                <ListItem
+                  key={r.id}
+                  label={describeRule(r.pattern)}
+                  {...opt({
+                    description: r.category_id
+                      ? (l.category.get(r.category_id)?.name ?? r.category_id)
+                      : (r.flow ?? undefined),
+                  })}
+                  endContent={
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Delete rule"
+                      onClick={() => void enqueue("deleteRule", { rule_id: r.id })}
+                    >
+                      <Trash2 aria-hidden />
+                    </Button>
+                  }
+                />
               ))}
-          </ul>
-        </section>
-      </div>
+          </List>
+        </VStack>
+      </VStack>
     </Sheet>
   );
 }
@@ -586,11 +587,13 @@ function OpeningSheet({
       open={account !== null}
       onOpenChange={(o) => !o && onClose()}
       title={`${name} opening balance`}
-      description={`What ${name} held when tracking started on 1 ${monthLabel(month)}. It opens ${monthLabel(month)} as "Balance brought forward".`}
+      description={`Held on 1 ${monthLabel(month)}, when tracking started.`}
+      purpose="form"
     >
-      <form
-        className="flex flex-col gap-4"
-        onSubmit={(e) => {
+      <VStack
+        as="form"
+        gap={5}
+        onSubmit={(e: FormEvent) => {
           e.preventDefault();
           if (!account || paisa === null) return;
           void enqueue("setOpeningBalance", { account_id: account, amount: paisa });
@@ -599,10 +602,10 @@ function OpeningSheet({
         }}
       >
         <MoneyInput label="Opening balance" value={v} onChange={setV} autoFocus />
-        <Button type="submit" variant="primary" size="lg" disabled={paisa === null}>
+        <Button type="submit" variant="primary" size="lg" width="full" disabled={paisa === null}>
           Set opening balance
         </Button>
-      </form>
+      </VStack>
     </Sheet>
   );
 }
@@ -625,11 +628,13 @@ function ResetSheet({
       open={open}
       onOpenChange={onOpenChange}
       title="Reset the ledger?"
-      description="Transactions, statements, balances and closed months are deleted on every device. Categories, rules, fixed charges, loans, goals and settings are kept."
+      description="Deletes transactions, statements, balances and closed months on every device. Categories, rules, fixed charges, loans, goals and settings stay."
+      purpose="form"
     >
-      <form
-        className="flex flex-col gap-4"
-        onSubmit={async (e) => {
+      <VStack
+        as="form"
+        gap={5}
+        onSubmit={async (e: FormEvent) => {
           e.preventDefault();
           if (!valid) return;
           setBusy(true);
@@ -644,26 +649,26 @@ function ResetSheet({
           }
         }}
       >
-        <Field label="Track from (first day of a month)">
+        <Field label="Track from">
           <Input
             type="month"
             value={start.slice(0, 7)}
             onChange={(e) => e.target.value && setStart(`${e.target.value}-01`)}
           />
         </Field>
-        <Field label="Type RESET to confirm">
-          <Input
-            value={typed}
-            onChange={(e) => setTyped(e.target.value.trim())}
-            autoCapitalize="characters"
-            autoComplete="off"
-            className="font-mono"
-          />
-        </Field>
-        <Button type="submit" variant="primary" size="lg" disabled={!valid} loading={busy}>
+        <TextInput
+          label="Type RESET to confirm"
+          value={typed}
+          onChange={(v) => setTyped(v.trim())}
+          autoCapitalize="characters"
+          autoComplete="off"
+          controlClassName="font-mono"
+          width="100%"
+        />
+        <Button type="submit" variant="danger" size="lg" width="full" disabled={!valid} loading={busy}>
           Reset and track from {dayLabel(start)} {start.slice(0, 4)}
         </Button>
-      </form>
+      </VStack>
     </Sheet>
   );
 }

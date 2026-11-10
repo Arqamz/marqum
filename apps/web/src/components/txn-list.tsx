@@ -1,11 +1,18 @@
+import { Badge } from "@astryxdesign/core/Badge";
+import { HStack } from "@astryxdesign/core/HStack";
+import { List, ListItem } from "@astryxdesign/core/List";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { formatRs } from "@marqum/core";
 import type { Transaction } from "@marqum/schema";
-import { CornerDownRight, CornerUpRight, Lock, TriangleAlert } from "lucide-react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { CornerDownRight, CornerUpRight, Lock } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
 import { useMemo } from "react";
 import { cn } from "../lib/cn.ts";
+import { opt } from "../lib/opt.ts";
 import { categoryPath, dayHeading, type Lookup, timeOf, topCategoryOf, txnTitle } from "../lib/view.ts";
-import { CategoryIcon } from "./category-icon.tsx";
+import { CategoryIcon, categoryTint } from "./category-icon.tsx";
+import { Money } from "./money.tsx";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -21,16 +28,17 @@ export function LedgerRow({ t, l }: { t: Transaction; l: Lookup }) {
   const title = forward ? "Balance brought forward" : "Balance carried forward";
   const where = m ? `${m[1]?.toLowerCase()} ${m[2]}` : null;
   return (
-    <li className="flex list-none items-center gap-3 px-3 py-3 text-fg-muted" data-testid="ledger-row">
-      <span className="grid size-10 shrink-0 place-items-center">
-        <Icon aria-hidden />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate">{title}</span>
-        <span className="truncate text-sm">{[where, wallet].filter(Boolean).join(" · ")}</span>
-      </span>
-      <span className="num shrink-0 text-right">{formatRs(t.amount, { sign: t.amount > 0 })}</span>
-    </li>
+    <ListItem
+      data-testid="ledger-row"
+      label={title}
+      description={[where, wallet].filter(Boolean).join(" · ")}
+      startContent={
+        <span className="grid size-10 place-items-center text-fg-muted">
+          <Icon aria-hidden />
+        </span>
+      }
+      endContent={<Money value={t.amount} sign={t.amount > 0} tone="muted" />}
+    />
   );
 }
 
@@ -66,46 +74,43 @@ function EntryRow({
   const warm = t.status === "provisional";
   const disputed = t.status === "disputed";
   const wallet = l.account.get(t.account_id) ?? t.account_id;
+  const title = txnTitle(t, l);
   const sub = [
-    t.reason && t.reason !== txnTitle(t, l) ? t.reason : null,
+    t.reason && t.reason !== title ? t.reason : null,
     path ?? (t.flow === "spend" ? "Untagged" : null),
     wallet,
   ]
     .filter(Boolean)
     .join(" · ");
   return (
-    <motion.li
-      layout={reduce ? false : "position"}
-      transition={{ duration: 0.22, ease: EASE }}
-      className="list-none"
-    >
-      <button
-        type="button"
-        onClick={() => onOpen(t)}
-        data-testid="txn-row"
-        data-status={t.status}
-        className={cn(
-          "relative flex w-full items-center gap-3 rounded-control px-3 py-3 text-left transition-colors hover:bg-surface-2",
-          disputed && "bg-warn-soft hover:bg-warn-soft",
-        )}
-      >
-        <AnimatePresence initial={false}>
-          {warm ? (
-            <motion.span
-              key="warm"
-              aria-hidden
-              className="warm-outline pointer-events-none absolute inset-0 rounded-control"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.25, ease: EASE }}
-            />
-          ) : null}
-        </AnimatePresence>
+    <ListItem
+      data-testid="txn-row"
+      data-status={t.status}
+      onClick={() => onOpen(t)}
+      {...opt({ className: disputed ? "bg-warn-soft" : undefined })}
+      label={
+        closed ? (
+          <HStack gap={1} vAlign="center">
+            <Text weight="medium" maxLines={1}>
+              {title}
+            </Text>
+            <Lock className="shrink-0 text-fg-subtle" aria-label="Closed month" />
+          </HStack>
+        ) : (
+          title
+        )
+      }
+      description={sub}
+      startContent={
         <span
           className={cn(
-            "relative grid size-10 shrink-0 place-items-center rounded-full",
-            top ? "bg-surface-2 text-fg" : "bg-surface-2 text-fg-subtle",
+            "grid size-10 place-items-center rounded-full",
+            top
+              ? categoryTint(top.id)
+              : t.amount > 0
+                ? "bg-green-subtle text-green-vivid"
+                : "bg-surface-2 text-fg-subtle",
+            warm && "warm-outline",
           )}
         >
           <motion.span
@@ -117,41 +122,32 @@ function EntryRow({
           >
             <CategoryIcon name={top?.icon ?? (t.amount > 0 ? "banknote" : "circle")} />
           </motion.span>
-          {warm || disputed ? (
-            <span
-              className="absolute -top-px -right-px size-3 rounded-full border-2 border-surface bg-warn"
-              aria-hidden
-            />
-          ) : null}
         </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="flex items-center gap-1 truncate font-medium">
-            <span className="truncate">{txnTitle(t, l)}</span>
-            {closed ? <Lock className="shrink-0 text-fg-subtle" aria-label="Closed month" /> : null}
-          </span>
-          <span className="truncate text-sm text-fg-muted">
-            {disputed ? (
-              <span className="inline-flex items-center gap-1 text-warn">
-                <TriangleAlert aria-hidden />
-                Not on the statement
-              </span>
-            ) : warm ? (
-              <span className="text-warn">Unverified · {sub}</span>
-            ) : (
-              sub
-            )}
-          </span>
-        </span>
-        <span className="flex shrink-0 flex-col items-end gap-1">
-          <span className="num font-medium">{formatRs(t.amount, { sign: t.amount > 0 })}</span>
-          <span className="num text-sm text-fg-muted">{timeOf(t.occurred_at)}</span>
-        </span>
-      </button>
-    </motion.li>
+      }
+      endContent={
+        <VStack gap={0.5} hAlign="end">
+          <Money
+            value={t.amount}
+            sign={t.amount > 0}
+            className="font-medium"
+            {...opt({ tone: t.amount > 0 ? ("pos" as const) : undefined })}
+          />
+          {disputed ? (
+            <Badge label="Not on statement" variant="error" />
+          ) : warm ? (
+            <Badge label="Unverified" variant="warning" />
+          ) : (
+            <Text type="supporting" hasTabularNumbers>
+              {timeOf(t.occurred_at)}
+            </Text>
+          )}
+        </VStack>
+      }
+    />
   );
 }
 
-/** Rows grouped by day, newest first, each day with its net total. */
+/** Rows grouped by day, newest first, each day with its spend. */
 export function TxnList({
   txns,
   l,
@@ -175,19 +171,25 @@ export function TxnList({
     return [...map.entries()];
   }, [txns]);
   return (
-    <div className="flex flex-col gap-6" data-testid="txn-list">
+    <VStack gap={6} data-testid="txn-list">
       {days.map(([day, rows]) => {
         const out = rows.reduce(
           (s, t) => s + (t.amount < 0 && (t.flow === "spend" || t.flow === "fee") ? t.amount : 0),
           0,
         );
         return (
-          <section key={day} className="flex flex-col gap-1">
-            <h3 className="flex items-baseline justify-between text-sm text-fg-muted">
-              <span>{dayHeading(day, now)}</span>
-              {out !== 0 ? <span className="num">{formatRs(-out)} spent</span> : null}
-            </h3>
-            <ul className="-mx-3 flex flex-col">
+          <VStack as="section" key={day} gap={1}>
+            <HStack justify="between" vAlign="center">
+              <Text type="label" color="secondary">
+                {dayHeading(day, now)}
+              </Text>
+              {out !== 0 ? (
+                <Text type="label" color="secondary" hasTabularNumbers>
+                  {formatRs(-out)}
+                </Text>
+              ) : null}
+            </HStack>
+            <List>
               {rows.map((t) => (
                 <TxnRow
                   key={t.id}
@@ -197,11 +199,11 @@ export function TxnList({
                   closed={isClosedMonth?.(t.occurred_at.slice(0, 7))}
                 />
               ))}
-            </ul>
-          </section>
+            </List>
+          </VStack>
         );
       })}
-    </div>
+    </VStack>
   );
 }
 

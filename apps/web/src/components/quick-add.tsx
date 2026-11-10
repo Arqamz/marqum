@@ -1,3 +1,6 @@
+import { HStack } from "@astryxdesign/core/HStack";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { classify, type Dataset, formatRs, karachiNow, parseRs } from "@marqum/core";
 import type { AccountId } from "@marqum/schema";
 import { useEffect, useMemo, useState } from "react";
@@ -7,7 +10,7 @@ import { CategoryPicker } from "./category-picker.tsx";
 import { useDataset } from "./dataset-provider.tsx";
 import { Button } from "./ui/button.tsx";
 import { Segmented } from "./ui/controls.tsx";
-import { Field, Input, MoneyInput } from "./ui/input.tsx";
+import { MoneyInput } from "./ui/input.tsx";
 import { Sheet } from "./ui/sheet.tsx";
 
 export interface QuickAddPreset {
@@ -23,12 +26,7 @@ export function QuickAddHost() {
   const preset = useStore(quickAdd);
   const ds = useDataset();
   return (
-    <Sheet
-      open={preset !== null}
-      onOpenChange={(o) => !o && quickAdd.set(null)}
-      title="Add a transaction"
-      description="It stays unverified until a statement confirms it."
-    >
+    <Sheet open={preset !== null} onOpenChange={(o) => !o && quickAdd.set(null)} title="Add a transaction">
       {preset && ds ? <QuickAddForm ds={ds} preset={preset} onDone={() => quickAdd.set(null)} /> : null}
     </Sheet>
   );
@@ -59,8 +57,9 @@ function QuickAddForm({ ds, preset, onDone }: { ds: Dataset; preset: QuickAddPre
   }, [picked, suggestion.category_id]);
 
   return (
-    <form
-      className="flex flex-col gap-6"
+    <VStack
+      as="form"
+      gap={6}
       onSubmit={(e) => {
         e.preventDefault();
         if (!signed) return;
@@ -82,9 +81,9 @@ function QuickAddForm({ ds, preset, onDone }: { ds: Dataset; preset: QuickAddPre
         onDone();
       }}
     >
-      <div className="flex flex-col gap-3">
+      <VStack gap={3}>
         <MoneyInput label="Amount" value={amount} onChange={setAmount} autoFocus />
-        <div className="grid grid-cols-2 gap-2">
+        <HStack gap={2} wrap="wrap">
           <Segmented
             label="Direction"
             value={direction}
@@ -100,15 +99,9 @@ function QuickAddForm({ ds, preset, onDone }: { ds: Dataset; preset: QuickAddPre
             onValueChange={setAccount}
             options={ds.accounts.map((a) => ({ value: a.id, label: a.name }))}
           />
-        </div>
-      </div>
-      <Field label="Reason">
-        <Input
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="Petrol, lunch with Ali…"
-        />
-      </Field>
+        </HStack>
+      </VStack>
+      <TextInput label="Reason" value={reason} onChange={setReason} placeholder="Petrol, lunch with Ali…" />
       {direction === "out" ? (
         <CategoryPicker
           ds={ds}
@@ -123,6 +116,6 @@ function QuickAddForm({ ds, preset, onDone }: { ds: Dataset; preset: QuickAddPre
       <Button type="submit" variant="primary" size="lg" disabled={!signed}>
         {signed ? `Add ${formatRs(Math.abs(signed))}` : "Add transaction"}
       </Button>
-    </form>
+    </VStack>
   );
 }

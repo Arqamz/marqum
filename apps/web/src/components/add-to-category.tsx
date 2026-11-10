@@ -1,11 +1,15 @@
+import { Grid } from "@astryxdesign/core/Grid";
+import { HStack } from "@astryxdesign/core/HStack";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { type Dataset, formatRs, karachiNow, parseRs } from "@marqum/core";
 import type { AccountId, Category } from "@marqum/schema";
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { enqueue, newId } from "../lib/commands.ts";
 import { RecurringForm } from "./recurring-form.tsx";
 import { Button } from "./ui/button.tsx";
 import { Chip, Segmented } from "./ui/controls.tsx";
-import { Field, Input, MoneyInput } from "./ui/input.tsx";
+import { Input, MoneyInput } from "./ui/input.tsx";
 import { Sheet } from "./ui/sheet.tsx";
 
 /** Category › Add: a one-off transaction, or a subscription/bill that repeats. */
@@ -24,7 +28,7 @@ export function AddToCategorySheet({
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title={`Add to ${category.name}`}>
       {open ? (
-        <div className="flex flex-col gap-6" data-testid="add-to-category">
+        <VStack gap={5} data-testid="add-to-category">
           <Segmented
             label="What to add"
             value={what}
@@ -39,7 +43,7 @@ export function AddToCategorySheet({
           ) : (
             <RecurringForm ds={ds} parentCategory={category.id} onDone={() => onOpenChange(false)} />
           )}
-        </div>
+        </VStack>
       ) : null}
     </Sheet>
   );
@@ -55,9 +59,10 @@ function TxnForm({ ds, category, onDone }: { ds: Dataset; category: Category; on
   const subs = ds.categories.filter((c) => c.parent_id === category.id).sort((a, b) => a.sort - b.sort);
   const paisa = parseRs(amount);
   return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e) => {
+    <VStack
+      as="form"
+      gap={4}
+      onSubmit={(e: FormEvent) => {
         e.preventDefault();
         if (!paisa) return;
         void enqueue("addProvisional", {
@@ -74,7 +79,7 @@ function TxnForm({ ds, category, onDone }: { ds: Dataset; category: Category; on
       }}
     >
       <MoneyInput label="Amount" value={amount} onChange={setAmount} autoFocus />
-      <div className="grid grid-cols-2 gap-3">
+      <Grid columns={2} gap={3} align="end">
         <Segmented
           label="Wallet"
           value={wallet}
@@ -88,12 +93,10 @@ function TxnForm({ ds, category, onDone }: { ds: Dataset; category: Category; on
           max={now.slice(0, 10)}
           onChange={(e) => setDate(e.target.value)}
         />
-      </div>
-      <Field label="Reason">
-        <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="What was it for?" />
-      </Field>
+      </Grid>
+      <TextInput label="Reason" value={reason} onChange={setReason} placeholder="What for?" isOptional />
       {subs.length > 0 ? (
-        <fieldset className="flex flex-wrap gap-2" aria-label="Subcategory">
+        <HStack as="fieldset" gap={2} wrap="wrap" aria-label="Subcategory">
           <Chip selected={sub === category.id} onClick={() => setSub(category.id)}>
             {category.name}
           </Chip>
@@ -102,12 +105,11 @@ function TxnForm({ ds, category, onDone }: { ds: Dataset; category: Category; on
               {s.name}
             </Chip>
           ))}
-        </fieldset>
+        </HStack>
       ) : null}
-      <p className="text-sm text-fg-muted">Stays unverified until a statement shows it.</p>
       <Button type="submit" variant="primary" size="lg" disabled={!paisa}>
         {paisa ? `Add ${formatRs(Math.abs(paisa))}` : "Add transaction"}
       </Button>
-    </form>
+    </VStack>
   );
 }

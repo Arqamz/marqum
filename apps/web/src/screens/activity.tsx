@@ -1,3 +1,12 @@
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Selector } from "@astryxdesign/core/Selector";
+import { StackItem } from "@astryxdesign/core/Stack";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import {
   addDays,
   availableMonths,
@@ -27,32 +36,34 @@ import type { ActivitySearch } from "../lib/search.ts";
 import { categoryPath, lookup, needsTag, txnTitle } from "../lib/view.ts";
 import { carryRows } from "./wallet.tsx";
 
+const DEFAULT_MONTH = "default";
+
 export function ActivityScreen({ search }: { search: ActivitySearch }) {
   const ds = useDataset();
   const now = useNow();
   return (
     <Screen
       actions={
-        <button
-          type="button"
+        <Button
+          size="icon"
+          variant="ghost"
           aria-label="Add a transaction"
           onClick={() => openQuickAdd()}
-          className="grid size-10 place-items-center rounded-full hover:bg-surface-2"
           data-testid="quick-add"
         >
           <Plus aria-hidden />
-        </button>
+        </Button>
       }
     >
       {ds ? (
         <ActivityContent ds={ds} now={now} search={search} />
       ) : (
-        <div className="flex flex-col gap-3">
-          <Skeleton className="h-8 w-3/4" />
+        <VStack gap={3}>
+          <Skeleton height={32} width="75%" />
           {[0, 1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-14" />
+            <Skeleton key={i} height={56} index={i} />
           ))}
-        </div>
+        </VStack>
       )}
     </Screen>
   );
@@ -80,6 +91,7 @@ function matches(t: Transaction, s: ActivitySearch, ds: Dataset, month: string |
 function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search: ActivitySearch }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState<string | null>(null);
+  const [q, setQ] = useState(search.q ?? "");
   const current = monthOf(now);
   // Unverified/untagged/search look across all months unless a month is picked.
   const month = search.month ?? (search.filter || search.q || search.cp ? null : current);
@@ -119,47 +131,55 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
   const cpName = search.cp ? l.counterparty.get(search.cp)?.name : undefined;
   const catName = search.category ? categoryPath(search.category, l) : null;
 
-  const headline = rows.every((t) => t.flow === "carry")
-    ? "Nothing here yet"
-    : `${formatRs(spent)} spent${month ? ` in ${month === current ? monthName(month) : monthLabel(month)}` : ""}${
-        untagged > 0 ? ` · ${untagged} untagged` : ""
-      }`;
+  const total = rows.every((t) => t.flow === "carry") ? null : formatRs(spent);
+  const when = month ? (month === current ? monthName(month) : monthLabel(month)) : "All months";
 
   return (
     <>
-      <Headline>{headline}</Headline>
+      <Headline
+        sub={
+          total ? (
+            <HStack as="span" gap={2} vAlign="center" wrap="wrap">
+              <Text color="secondary">{when}</Text>
+              {untagged > 0 ? <Badge label={`${untagged} untagged`} variant="warning" /> : null}
+            </HStack>
+          ) : undefined
+        }
+      >
+        {total ? `${total} spent` : "Nothing here yet"}
+      </Headline>
 
-      <div className="flex flex-col gap-3">
-        <label className="relative">
-          <Search
-            className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-fg-subtle"
-            aria-hidden
+      <VStack gap={3}>
+        <TextInput
+          type="search"
+          label="Search"
+          isLabelHidden
+          placeholder="Search"
+          startIcon={Search}
+          hasClear
+          value={q}
+          onChange={(v) => {
+            setQ(v);
+            set({ q: v || undefined });
+          }}
+        />
+        <HStack gap={2} wrap="wrap" vAlign="center">
+          <Selector
+            label="Month"
+            isLabelHidden
+            size="sm"
+            variant="secondary"
+            presentation="adaptive"
+            value={search.month ?? DEFAULT_MONTH}
+            onChange={(v) => set({ month: v === DEFAULT_MONTH ? undefined : v })}
+            options={[
+              {
+                value: DEFAULT_MONTH,
+                label: search.filter || search.q || search.cp ? "All months" : monthName(current),
+              },
+              ...months.map((m) => ({ value: m, label: monthLabel(m) })),
+            ]}
           />
-          <input
-            type="search"
-            placeholder="Search people, reasons, categories"
-            aria-label="Search"
-            defaultValue={search.q ?? ""}
-            onChange={(e) => set({ q: e.target.value || undefined })}
-            className="h-12 w-full rounded-control bg-surface pr-4 pl-12 text-base outline-none focus:ring-2 focus:ring-accent"
-          />
-        </label>
-        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none]">
-          <select
-            aria-label="Month"
-            value={search.month ?? ""}
-            onChange={(e) => set({ month: e.target.value || undefined })}
-            className="h-8 shrink-0 rounded-full border border-border bg-surface px-3 text-sm"
-          >
-            <option value="">
-              {search.filter || search.q || search.cp ? "All months" : monthName(current)}
-            </option>
-            {months.map((m) => (
-              <option key={m} value={m}>
-                {monthLabel(m)}
-              </option>
-            ))}
-          </select>
           {ds.accounts.map((a) => (
             <Chip
               key={a.id}
@@ -182,60 +202,72 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
             Unverified
           </Chip>
           {catName ? (
-            <Chip selected onClick={() => set({ category: undefined })}>
+            <Chip
+              selected
+              label={`${catName}, remove`}
+              icon={<X aria-hidden />}
+              onClick={() => set({ category: undefined })}
+            >
               {catName}
-              <X aria-label="Remove" />
             </Chip>
           ) : null}
           {cpName ? (
-            <Chip selected onClick={() => set({ cp: undefined })}>
+            <Chip
+              selected
+              label={`${cpName}, remove`}
+              icon={<X aria-hidden />}
+              onClick={() => set({ cp: undefined })}
+            >
               {cpName}
-              <X aria-label="Remove" />
             </Chip>
           ) : null}
-        </div>
-      </div>
+        </HStack>
+      </VStack>
 
       {soon.length > 0 ? (
-        <section className="flex flex-col gap-1" aria-label="Expected this week">
-          <h3 className="text-sm text-fg-muted">Expected this week</h3>
+        <VStack as="section" gap={1} aria-label="Expected this week">
+          <Text type="label" color="secondary">
+            This week
+          </Text>
           <ExpectedRows charges={soon} />
-        </section>
+        </VStack>
       ) : null}
 
       {disputed.length > 0 ? (
-        <section
-          className="flex flex-col gap-3 rounded-card bg-warn-soft p-4"
-          aria-label="Not on the statement"
+        <Banner
+          status="warning"
+          title={`${disputed.length} not on the statement`}
+          description="Keep if it went through the other wallet."
+          collapsible={false}
         >
-          <p className="text-sm">
-            <span className="font-medium">
-              {disputed.length} {disputed.length === 1 ? "entry isn't" : "entries aren't"} on the statement.
-            </span>{" "}
-            <span className="text-fg-muted">Delete it, or keep it if it went through the other wallet.</span>
-          </p>
-          {disputed.map((t) => (
-            <div key={t.id} className="flex items-center gap-2 text-sm" data-testid="disputed-row">
-              <span className="num min-w-0 flex-1 truncate">
-                {formatRs(t.amount)} · {txnTitle(t, l)}
-              </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => void enqueue("resolveDisputed", { txn_id: t.id, action: "keep_provisional" })}
-              >
-                Keep
-              </Button>
-              <Button
-                size="sm"
-                variant="danger"
-                onClick={() => void enqueue("resolveDisputed", { txn_id: t.id, action: "delete" })}
-              >
-                Delete
-              </Button>
-            </div>
-          ))}
-        </section>
+          <VStack gap={2}>
+            {disputed.map((t) => (
+              <HStack key={t.id} gap={2} vAlign="center" data-testid="disputed-row">
+                <StackItem size="fill">
+                  <Text maxLines={1} hasTabularNumbers>
+                    {formatRs(t.amount)} · {txnTitle(t, l)}
+                  </Text>
+                </StackItem>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    void enqueue("resolveDisputed", { txn_id: t.id, action: "keep_provisional" })
+                  }
+                >
+                  Keep
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={() => void enqueue("resolveDisputed", { txn_id: t.id, action: "delete" })}
+                >
+                  Delete
+                </Button>
+              </HStack>
+            ))}
+          </VStack>
+        </Banner>
       ) : null}
 
       {rows.length > 0 ? (
@@ -256,16 +288,15 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
 
 function EmptyActivity({ filtered }: { filtered: boolean }) {
   return (
-    <div className="flex flex-col items-start gap-3 py-8">
-      <p className="text-fg-muted">
-        {filtered
-          ? "No transactions match these filters."
-          : "Generate a NayaPay or SadaPay statement — it'll appear here automatically. Or add one by hand."}
-      </p>
-      <Button variant="primary" onClick={() => openQuickAdd()}>
-        Add a transaction
-      </Button>
-    </div>
+    <EmptyState
+      title={filtered ? "No matches" : "No transactions yet"}
+      description={filtered ? "Try fewer filters." : "Statements land here automatically."}
+      actions={
+        <Button variant="primary" onClick={() => openQuickAdd()}>
+          Add a transaction
+        </Button>
+      }
+    />
   );
 }
 

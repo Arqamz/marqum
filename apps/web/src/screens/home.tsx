@@ -1,20 +1,33 @@
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Grid } from "@astryxdesign/core/Grid";
+import { HStack } from "@astryxdesign/core/HStack";
+import { ProgressBar } from "@astryxdesign/core/ProgressBar";
+import { StackItem } from "@astryxdesign/core/Stack";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import {
+  type CategoryCard,
   categoryCards,
   type Dataset,
   dayLabel,
   formatRs,
-  goalStatus,
   monthLabel,
   monthLedger,
   monthOf,
+  monthPulse,
   netPosition,
   suggestOpeningBalance,
   unverifiedSummary,
+  type WalletPosition,
 } from "@marqum/core";
-import { Link } from "@tanstack/react-router";
-import { Plus, TriangleAlert } from "lucide-react";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { ArrowDownLeft, ArrowUpRight, Plus } from "lucide-react";
 import { useMemo } from "react";
-import { CategoryIcon } from "../components/category-icon.tsx";
+import { WalletLogo } from "../components/brand-logo.tsx";
+import { CategoryTile } from "../components/category-icon.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { HeroAmount, Money, TweenMoney } from "../components/money.tsx";
 import { openQuickAdd } from "../components/quick-add.tsx";
@@ -33,14 +46,9 @@ export function HomeScreen() {
   return (
     <Screen
       actions={
-        <button
-          type="button"
-          aria-label="Add a transaction"
-          onClick={() => openQuickAdd()}
-          className="grid size-10 place-items-center rounded-full hover:bg-surface-2"
-        >
+        <Button size="icon" variant="ghost" label="Add a transaction" onClick={() => openQuickAdd()}>
           <Plus aria-hidden />
-        </button>
+        </Button>
       }
     >
       {ds ? <HomeContent ds={ds} now={now} /> : <HomeSkeleton />}
@@ -50,22 +58,38 @@ export function HomeScreen() {
 
 function HomeSkeleton() {
   return (
-    <div className="flex flex-col gap-8" aria-busy>
-      <div className="flex flex-col items-center gap-3 py-8">
-        <Skeleton className="h-4 w-24" />
-        <Skeleton className="h-14 w-56" />
-        <Skeleton className="h-4 w-64" />
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <Skeleton className="h-16" />
-        <Skeleton className="h-16" />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
+    <VStack gap={6} aria-busy>
+      <VStack gap={3} hAlign="center" paddingBlock={8}>
+        <Skeleton width={96} height={14} />
+        <Skeleton width={224} height={56} />
+      </VStack>
+      <Grid columns={2} gap={3}>
+        <Skeleton height={128} index={1} />
+        <Skeleton height={128} index={2} />
+      </Grid>
+      <Grid columns={2} gap={3}>
         {[0, 1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-28 rounded-card" />
+          <Skeleton key={i} height={112} index={i + 3} />
         ))}
-      </div>
-    </div>
+      </Grid>
+    </VStack>
+  );
+}
+
+/** ▲ 12% / ▼ 8% against a pace; red when ahead of it (spending faster), green when behind. */
+export function Ticker({ value, label }: { value: number | null; label: string }) {
+  if (value === null || !Number.isFinite(value)) return null;
+  const pct = Math.round(value * 100);
+  if (Math.abs(pct) < 3)
+    return <Badge variant="neutral" label="● on pace" aria-label={`On pace vs ${label}`} />;
+  const up = pct > 0;
+  return (
+    <Badge
+      variant={up ? "error" : "success"}
+      label={`${up ? "▲" : "▼"} ${Math.abs(pct)}%`}
+      aria-label={`${Math.abs(pct)}% ${up ? "above" : "below"} ${label}`}
+      data-testid="ticker"
+    />
   );
 }
 
@@ -73,8 +97,8 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
   const month = monthOf(now);
   const np = useMemo(() => netPosition(ds, now), [ds, now]);
   const cards = useMemo(() => categoryCards(ds, month, now), [ds, month, now]);
+  const pulse = useMemo(() => monthPulse(ds, month, now), [ds, month, now]);
   const unverified = useMemo(() => unverifiedSummary(ds), [ds]);
-  const setAside = useMemo(() => goalStatus(ds, now).reduce((s, g) => s + g.saved, 0), [ds, now]);
 
   const debtLine = useMemo(() => {
     if (!np.in_debt) return null;
@@ -90,73 +114,34 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
     return `owe ${formatRs(np.debt)} across ${open.length} loans${np.debt_free_month ? ` · clear by ${monthLabel(np.debt_free_month)}` : ""}`;
   }, [np]);
 
-  const verifiedTo = np.wallets
-    .map((w) => w.verified_until)
-    .filter((d): d is string => d !== null)
-    .sort()[0];
-
   return (
-    <>
-      <section className="flex flex-col items-center gap-2 pt-6 pb-2 text-center" data-testid="hero">
-        <span className="text-sm font-medium text-fg-muted">Net position</span>
+    <VStack gap={6}>
+      <VStack as="section" gap={2} hAlign="center" paddingBlockStart={4} data-testid="hero">
+        <Text type="label" color="secondary">
+          Net position
+        </Text>
         <HeroAmount
           value={np.net}
-          className={cn("text-hero font-medium transition-colors", np.net < 0 ? "text-neg" : "text-fg")}
+          className={cn("text-hero font-semibold transition-colors", np.net < 0 ? "text-neg" : "text-fg")}
         />
+        <HStack gap={2} hAlign="center" wrap="wrap" vAlign="center">
+          <Text type="supporting" hasTabularNumbers>
+            {formatRs(pulse.spent)} spent in {monthLabel(month).split(" ")[0]}
+          </Text>
+          <Ticker value={pulse.vs_pace} label="your monthly plan" />
+        </HStack>
         {debtLine ? (
-          <p
-            className="mt-1 max-w-sm rounded-card bg-neg-soft px-4 py-2 text-sm text-balance text-neg"
-            data-testid="debt-line"
-          >
-            <span className="font-medium">In debt</span> · {debtLine}
-          </p>
-        ) : (
-          <p className="max-w-xs text-sm text-balance text-fg-muted">
-            Across SadaPay and NayaPay{verifiedTo ? ` · verified to ${dayLabel(verifiedTo)}` : ""}
-          </p>
-        )}
-      </section>
+          <Text type="supporting" justify="center" textWrap="balance" data-testid="debt-line">
+            <span className="text-neg">In debt · {debtLine}</span>
+          </Text>
+        ) : null}
+      </VStack>
 
-      <section className="grid grid-cols-2 gap-3" aria-label="Wallets">
-        {np.wallets.map((w) => {
-          const below = w.floor !== null && w.balance < w.floor;
-          const ledger = monthLedger(ds, w.account_id, month, now);
-          return (
-            <Link
-              key={w.account_id}
-              to="/wallet/$id"
-              params={{ id: w.account_id }}
-              className="flex flex-col gap-2 rounded-card bg-surface p-4 transition-colors hover:bg-surface-2"
-              data-testid={`wallet-${w.account_id}`}
-            >
-              <span className="text-sm text-fg-muted">{w.name}</span>
-              <TweenMoney value={w.balance} className="text-xl font-medium" />
-              <span className="flex flex-col gap-1 text-sm text-fg-muted">
-                <span className="num">{formatRs(ledger.inflow, { sign: ledger.inflow > 0 })} in</span>
-                <span className="num">{formatRs(-ledger.outflow)} out</span>
-                {w.role === "vault" && setAside > 0 ? (
-                  <span className="num">{formatRs(setAside)} set aside</span>
-                ) : null}
-                {below && w.floor !== null ? (
-                  <span className="num text-warn">{formatRs(w.floor - w.balance)} below floor</span>
-                ) : null}
-                {w.unaccounted_hint && !suggestOpeningBalance(ds, w.account_id) ? (
-                  <span className="text-fg-muted">{w.unaccounted_hint}</span>
-                ) : null}
-                {w.provisional_delta !== 0 ? (
-                  <span className="num text-warn">
-                    {formatRs(w.provisional_delta, { sign: true })} unverified
-                  </span>
-                ) : (
-                  <span>
-                    {w.verified_until ? `verified to ${dayLabel(w.verified_until)}` : "no statement yet"}
-                  </span>
-                )}
-              </span>
-            </Link>
-          );
-        })}
-      </section>
+      <Grid columns={2} gap={3} role="group" aria-label="Wallets">
+        {np.wallets.map((w) => (
+          <WalletCard key={w.account_id} ds={ds} w={w} month={month} now={now} />
+        ))}
+      </Grid>
 
       <OpeningSuggestions ds={ds} />
 
@@ -164,71 +149,144 @@ function HomeContent({ ds, now }: { ds: Dataset; now: string }) {
         <Link
           to={isNative() ? "/activity" : "/import"}
           search={isNative() ? { filter: "unverified" } : {}}
-          className="flex items-center gap-3 rounded-card bg-warn-soft px-4 py-3 text-sm"
           data-testid="unverified-banner"
         >
-          <TriangleAlert className="shrink-0 text-warn" aria-hidden />
-          <span className="flex-1">
-            <span className="num font-medium">
-              {unverified.count} unverified · {formatRs(Math.abs(unverified.total))}
-              {unverified.since ? ` since ${dayLabel(unverified.since.slice(0, 10))}` : ""}
-            </span>
-            <span className="text-fg-muted">
-              {unverified.disputed > 0
-                ? ` — ${unverified.disputed} not on the statement, resolve them`
-                : " — generate statements"}
-            </span>
-          </span>
+          <Banner
+            status="warning"
+            title={`${unverified.count} unverified · ${formatRs(Math.abs(unverified.total))}`}
+            description={
+              unverified.disputed > 0
+                ? `${unverified.disputed} not on the statement — resolve`
+                : unverified.since
+                  ? `Since ${dayLabel(unverified.since.slice(0, 10))} · get statements`
+                  : "Get statements"
+            }
+          />
         </Link>
       ) : null}
 
       {ds.transactions.length === 0 ? (
-        <section className="flex flex-col items-start gap-3 rounded-card bg-surface p-4">
-          <p className="text-fg-muted">
-            {isNative()
-              ? "Generate a NayaPay statement — it'll appear here automatically. For SadaPay, generate one and share it to Marqūm."
-              : "Import a NayaPay or SadaPay statement to see where your money goes."}
-          </p>
-          <Link
-            to="/import"
-            className="inline-flex h-10 items-center rounded-control bg-accent px-4 text-sm font-medium text-accent-fg"
-          >
-            Import statements
-          </Link>
-        </section>
+        <EmptyState
+          title="No transactions yet"
+          description={isNative() ? "Generate a statement; it lands here." : "Import a statement to start."}
+          actions={<ImportButton />}
+        />
       ) : null}
 
-      <section className="grid grid-cols-2 gap-3" aria-label={`Spending in ${monthLabel(month)}`}>
-        {cards.map((c) => (
-          <Link
-            key={c.category.id}
-            to="/category/$id"
-            params={{ id: c.category.id }}
-            search={{ month }}
-            className="flex flex-col gap-3 rounded-card bg-surface p-4 transition-colors hover:bg-surface-2"
-            data-testid="category-card"
-          >
-            <span className="flex items-center gap-2 text-sm text-fg-muted">
-              <CategoryIcon name={c.category.icon} />
-              <span className="truncate">{c.category.name}</span>
-            </span>
-            <span className="flex flex-col gap-1">
-              <Money
-                value={c.spent}
-                className="text-xl font-medium"
-                {...(c.average === null || (c.average === 0 && c.spent === 0)
-                  ? {}
-                  : { tone: c.over_average ? ("neg" as const) : ("pos" as const) })}
-              />
-              <span className="num text-sm text-fg-muted">
-                {c.average === null ? "no history yet" : `avg ${formatRs(c.average)}`}
+      <VStack as="section" gap={3} aria-label={`Spending in ${monthLabel(month)}`}>
+        <HStack justify="between" vAlign="center">
+          <Text type="label">{monthLabel(month)}</Text>
+          {cards.some((c) => c.vs_pace !== null) ? null : (
+            <Text type="supporting">▲▼ from Dec, vs your average</Text>
+          )}
+        </HStack>
+        <Grid columns={2} gap={3}>
+          {cards.map((c) => (
+            <CategoryTileCard key={c.category.id} c={c} month={month} />
+          ))}
+        </Grid>
+      </VStack>
+
+      <WhatIfCard ds={ds} now={now} />
+    </VStack>
+  );
+}
+
+function ImportButton() {
+  const navigate = useNavigate();
+  return (
+    <Button variant="primary" onClick={() => void navigate({ to: "/import" })}>
+      Import statements
+    </Button>
+  );
+}
+
+/** The wallet in its bank's colours: logo, balance, this month's in/out; badges only when something's off. */
+function WalletCard({ ds, w, month, now }: { ds: Dataset; w: WalletPosition; month: string; now: string }) {
+  const ledger = monthLedger(ds, w.account_id, month, now);
+  const below = w.floor !== null && w.balance < w.floor;
+  const id = w.account_id;
+  return (
+    <Link to="/wallet/$id" params={{ id }} data-testid={`wallet-${id}`} className="block rounded-container">
+      <Card variant={id} height="100%" padding={4}>
+        <VStack gap={3} height="100%">
+          <HStack gap={2} vAlign="center">
+            <WalletLogo id={id} size={20} />
+            <Text type="label" color="inherit" weight="semibold">
+              {w.name}
+            </Text>
+          </HStack>
+          <TweenMoney value={w.balance} className="text-2xl font-semibold" />
+          <StackItem size="fill">
+            <HStack gap={3} wrap="wrap" className="text-sm">
+              <span className="num inline-flex items-center gap-0.5" title="In this month">
+                <ArrowDownLeft size={14} aria-label="In" />
+                {formatRs(ledger.inflow, { compact: true })}
               </span>
-            </span>
-          </Link>
-        ))}
-        <WhatIfCard ds={ds} now={now} />
-      </section>
-    </>
+              <span className="num inline-flex items-center gap-0.5" title="Out this month">
+                <ArrowUpRight size={14} aria-label="Out" />
+                {formatRs(ledger.outflow, { compact: true })}
+              </span>
+            </HStack>
+          </StackItem>
+          {below && w.floor !== null ? (
+            <Badge
+              variant="warning"
+              label={`${formatRs(w.floor - w.balance, { compact: true })} below floor`}
+            />
+          ) : null}
+          {w.provisional_delta !== 0 ? (
+            <Badge
+              variant="warning"
+              label={`${formatRs(w.provisional_delta, { sign: true, compact: true })} unverified`}
+            />
+          ) : null}
+        </VStack>
+      </Card>
+    </Link>
+  );
+}
+
+function CategoryTileCard({ c, month }: { c: CategoryCard; month: string }) {
+  const share = Math.round(c.share * 100);
+  return (
+    <Link
+      to="/category/$id"
+      params={{ id: c.category.id }}
+      search={{ month }}
+      data-testid="category-card"
+      className="block rounded-container transition-transform active:scale-[0.98]"
+    >
+      <Card height="100%" padding={3}>
+        <VStack gap={2}>
+          <HStack gap={2} vAlign="center">
+            <CategoryTile id={c.category.id} name={c.category.icon} size="sm" />
+            <StackItem size="fill">
+              <Text type="label" maxLines={1} hasTruncateTooltip={false}>
+                {c.category.name}
+              </Text>
+            </StackItem>
+          </HStack>
+          <HStack gap={2} vAlign="center" justify="between" wrap="wrap">
+            <Money value={c.spent} className="text-lg font-semibold" />
+            <Ticker value={c.vs_pace} label={c.baseline_source === "budget" ? "budget" : "average"} />
+          </HStack>
+          <ProgressBar
+            label={`${share}% of this month's spending`}
+            isLabelHidden
+            value={share}
+            max={100}
+            variant="accent"
+          />
+          <Text type="supporting" size="xsm" hasTabularNumbers>
+            {share}% of spend
+            {c.baseline !== null
+              ? ` · ${c.baseline_source === "budget" ? "budget" : "avg"} ${formatRs(c.baseline, { compact: true })}`
+              : ""}
+          </Text>
+        </VStack>
+      </Card>
+    </Link>
   );
 }
 
@@ -241,41 +299,31 @@ function OpeningSuggestions({ ds }: { ds: Dataset }) {
   const items = ds.accounts
     .map((a) => {
       const s = suggestOpeningBalance(ds, a.id);
-      if (!s) return null;
-      const stated = ds.balances
-        .filter((b) => b.account_id === a.id && (b.source === "manual" || b.source === "notification"))
-        .sort((x, y) => x.as_of.localeCompare(y.as_of))
-        .at(-1);
-      return { account: a, suggestion: s, stated };
+      return s ? { account: a, suggestion: s } : null;
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
   if (items.length === 0) return null;
   return (
-    <section className="flex flex-col gap-3" aria-label="Opening balances">
-      {items.map(({ account, suggestion, stated }) => (
-        <div
+    <VStack as="section" gap={3} aria-label="Opening balances">
+      {items.map(({ account, suggestion }) => (
+        <Banner
           key={account.id}
-          className="flex flex-col gap-3 rounded-card bg-surface p-4"
+          status="info"
           data-testid="opening-suggestion"
-        >
-          <p className="num text-sm">
-            {stated
-              ? `${account.name}'s balance on ${dayLabel(stated.as_of.slice(0, 10))} was ${formatRs(stated.balance, { decimals: true })}`
-              : `${account.name}'s stated balance`}{" "}
-            → your 1 {monthLabel(start)} opening was {formatRs(suggestion.amount, { decimals: true })}. Set
-            it?
-          </p>
-          <Button
-            variant="secondary"
-            className="self-start"
-            onClick={() =>
-              void enqueue("setOpeningBalance", { account_id: account.id, amount: suggestion.amount })
-            }
-          >
-            Set {account.name} opening to {formatRs(suggestion.amount, { decimals: true })}
-          </Button>
-        </div>
+          title={`${account.name} opened ${monthLabel(start)} at ${formatRs(suggestion.amount, { decimals: true })}?`}
+          endContent={
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() =>
+                void enqueue("setOpeningBalance", { account_id: account.id, amount: suggestion.amount })
+              }
+            >
+              Set
+            </Button>
+          }
+        />
       ))}
-    </section>
+    </VStack>
   );
 }

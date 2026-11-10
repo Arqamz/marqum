@@ -1,3 +1,7 @@
+import { Card } from "@astryxdesign/core/Card";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { formatRs } from "@marqum/core";
 import type { ReactNode } from "react";
 import {
@@ -19,10 +23,23 @@ import { monthShort } from "../lib/months.ts";
 
 /*
  * Chart marks follow the dataviz rules: thin bars with 4px rounded data-ends on the baseline, a 2px surface
- * gap between adjacent bars, recessive axes, hover tooltips, no dual axes. Colours come from tokens.
+ * gap between adjacent bars, recessive axes, hover tooltips, no dual axes. Colours are Astryx tokens only:
+ * spending / current in accent, income in success, over-budget in error.
  */
 
-const AXIS = { fontSize: 12, fill: "var(--fg-muted)" } as const;
+const C = {
+  accent: "var(--color-accent)",
+  soft: "var(--color-accent-muted)",
+  income: "var(--color-text-success)",
+  over: "var(--color-text-error)",
+  warn: "var(--color-warning)",
+  warnSoft: "var(--color-warning-muted)",
+  muted: "var(--color-text-secondary)",
+  cursor: "var(--color-background-muted)",
+  rule: "var(--color-border-emphasized)",
+} as const;
+
+const AXIS = { fontSize: 12, fill: C.muted } as const;
 const compact = (paisa: number): string => {
   const sign = paisa < 0 ? "−" : "";
   const rs = Math.abs(paisa) / 100;
@@ -34,9 +51,60 @@ const compactAbs = (rs: number): string => {
   return String(Math.round(rs));
 };
 
-function TipBox({ children }: { children: ReactNode }) {
-  return <div className="num rounded-control bg-surface px-3 py-2 text-sm shadow-float">{children}</div>;
+function TipBox({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Card padding={2} elevation="med">
+      <VStack gap={0.5}>
+        <Text type="supporting" hasTabularNumbers>
+          {title}
+        </Text>
+        {children}
+      </VStack>
+    </Card>
+  );
 }
+
+/** One tooltip line. */
+function Tip({ children, strong, className }: { children: ReactNode; strong?: boolean; className?: string }) {
+  return (
+    <Text
+      hasTabularNumbers
+      {...(strong ? { weight: "medium" as const } : {})}
+      {...(className ? { className } : {})}
+    >
+      {children}
+    </Text>
+  );
+}
+
+/** Legend key: a dot, a line or a band in a token colour. */
+function Key({
+  color,
+  shape = "dot",
+  children,
+}: {
+  color: string;
+  shape?: "dot" | "line" | "band";
+  children: string;
+}) {
+  return (
+    <HStack gap={2} vAlign="center">
+      <svg width="16" height="8" viewBox="0 0 16 8" aria-hidden>
+        {shape === "dot" ? (
+          <circle cx="4" cy="4" r="4" fill={color} />
+        ) : shape === "line" ? (
+          <rect y="3" width="16" height="2" rx="1" fill={color} />
+        ) : (
+          <rect width="16" height="8" rx="2" fill={color} />
+        )}
+      </svg>
+      <Text type="supporting">{children}</Text>
+    </HStack>
+  );
+}
+
+const monthTitle = (m: string): string => `${monthShort(m)} ${m.slice(0, 4)}`;
+const dayTitle = (d: string): string => `${Number(d.slice(8, 10))} ${monthShort(d.slice(0, 7))}`;
 
 export interface MonthBar {
   month: string;
@@ -45,7 +113,7 @@ export interface MonthBar {
   current?: boolean;
 }
 
-/** 12-month bars; the current month is the darker neutral, unusual months amber with a label in the tooltip. */
+/** 12-month bars; the current month in accent, past months soft accent, unusual months amber. */
 export function MonthlyBars({
   data,
   average,
@@ -56,7 +124,7 @@ export function MonthlyBars({
   onSelect?: (month: string) => void;
 }) {
   return (
-    <div className="h-48 w-full" data-testid="monthly-bars">
+    <VStack className="h-48 w-full" data-testid="monthly-bars">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 0, bottom: 0, left: 0 }} barCategoryGap={2}>
           <XAxis
@@ -69,28 +137,20 @@ export function MonthlyBars({
           />
           <YAxis hide domain={[0, "dataMax"]} />
           <Tooltip
-            cursor={{ fill: "var(--surface-2)" }}
+            cursor={{ fill: C.cursor }}
             content={({ active, payload }) => {
               const p = payload?.[0]?.payload as MonthBar | undefined;
               if (!active || !p) return null;
               return (
-                <TipBox>
-                  <div className="text-fg-muted">
-                    {monthShort(p.month)} {p.month.slice(0, 4)}
-                  </div>
-                  <div className="font-medium">{formatRs(p.value)}</div>
-                  {p.outlier ? <div className="text-warn">Unusual month</div> : null}
+                <TipBox title={monthTitle(p.month)}>
+                  <Tip strong>{formatRs(p.value)}</Tip>
+                  {p.outlier ? <Tip className="text-warn">Unusual month</Tip> : null}
                 </TipBox>
               );
             }}
           />
           {average ? (
-            <ReferenceLine
-              y={average}
-              stroke="var(--fg-muted)"
-              strokeDasharray="4 4"
-              ifOverflow="extendDomain"
-            />
+            <ReferenceLine y={average} stroke={C.muted} strokeDasharray="4 4" ifOverflow="extendDomain" />
           ) : null}
           <Bar
             dataKey="value"
@@ -105,35 +165,24 @@ export function MonthlyBars({
               : {})}
           >
             {data.map((d) => (
-              <Cell
-                key={d.month}
-                fill={
-                  d.outlier ? "var(--warn-line)" : d.current ? "var(--chart-bar-current)" : "var(--chart-bar)"
-                }
-              />
+              <Cell key={d.month} fill={d.outlier ? C.warn : d.current ? C.accent : C.soft} />
             ))}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
-    </div>
+    </VStack>
   );
 }
 
 /** Sent vs received per month: two series, legend + direct identity, one axis. */
 export function SentReceived({ data }: { data: { month: string; sent: number; received: number }[] }) {
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex gap-4 text-sm text-fg-muted" aria-hidden>
-        <span className="inline-flex items-center gap-2">
-          <span className="size-2 rounded-full bg-[var(--chart-out)]" />
-          Sent
-        </span>
-        <span className="inline-flex items-center gap-2">
-          <span className="size-2 rounded-full bg-[var(--chart-in)]" />
-          Received
-        </span>
-      </div>
-      <div className="h-48 w-full">
+    <VStack gap={2}>
+      <HStack gap={4} aria-hidden>
+        <Key color={C.accent}>Sent</Key>
+        <Key color={C.income}>Received</Key>
+      </HStack>
+      <VStack className="h-48 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={data}
@@ -151,19 +200,16 @@ export function SentReceived({ data }: { data: { month: string; sent: number; re
             />
             <YAxis hide />
             <Tooltip
-              cursor={{ fill: "var(--surface-2)" }}
+              cursor={{ fill: C.cursor }}
               content={({ active, payload }) => {
                 const p = payload?.[0]?.payload as
                   | { month: string; sent: number; received: number }
                   | undefined;
                 if (!active || !p) return null;
                 return (
-                  <TipBox>
-                    <div className="text-fg-muted">
-                      {monthShort(p.month)} {p.month.slice(0, 4)}
-                    </div>
-                    <div>Sent {formatRs(p.sent)}</div>
-                    <div>Received {formatRs(p.received)}</div>
+                  <TipBox title={monthTitle(p.month)}>
+                    <Tip>Sent {formatRs(p.sent)}</Tip>
+                    <Tip>Received {formatRs(p.received)}</Tip>
                   </TipBox>
                 );
               }}
@@ -171,7 +217,7 @@ export function SentReceived({ data }: { data: { month: string; sent: number; re
             <Bar
               dataKey="sent"
               name="Sent"
-              fill="var(--chart-out)"
+              fill={C.accent}
               radius={[4, 4, 0, 0]}
               maxBarSize={14}
               isAnimationActive={false}
@@ -179,15 +225,15 @@ export function SentReceived({ data }: { data: { month: string; sent: number; re
             <Bar
               dataKey="received"
               name="Received"
-              fill="var(--chart-in)"
+              fill={C.income}
               radius={[4, 4, 0, 0]}
               maxBarSize={14}
               isAnimationActive={false}
             />
           </BarChart>
         </ResponsiveContainer>
-      </div>
-    </div>
+      </VStack>
+    </VStack>
   );
 }
 
@@ -228,9 +274,8 @@ export function Waterfall({ steps }: { steps: { label: string; amount: number }[
       total: false,
     };
   });
-  const left = steps.at(-1)?.amount ?? 0;
   return (
-    <div className="h-56 w-full" data-testid="waterfall">
+    <VStack className="h-56 w-full" data-testid="waterfall">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 0, bottom: 0, left: 0 }} barCategoryGap={2}>
           <XAxis
@@ -242,16 +287,15 @@ export function Waterfall({ steps }: { steps: { label: string; amount: number }[
             tickFormatter={(l: string) => SHORT[l] ?? l}
           />
           <YAxis tick={AXIS} axisLine={false} tickLine={false} width={36} tickFormatter={compact} />
-          <ReferenceLine y={0} stroke="var(--border-strong)" />
+          <ReferenceLine y={0} stroke={C.rule} />
           <Tooltip
-            cursor={{ fill: "var(--surface-2)" }}
+            cursor={{ fill: C.cursor }}
             content={({ active, payload }) => {
               const p = payload?.[0]?.payload as (typeof data)[number] | undefined;
               if (!active || !p) return null;
               return (
-                <TipBox>
-                  <div className="text-fg-muted">{p.label}</div>
-                  <div className="font-medium">{formatRs(p.amount, { sign: !p.total })}</div>
+                <TipBox title={p.label}>
+                  <Tip strong>{formatRs(p.amount, { sign: !p.total })}</Tip>
                 </TipBox>
               );
             }}
@@ -259,23 +303,12 @@ export function Waterfall({ steps }: { steps: { label: string; amount: number }[
           <Bar dataKey="base" stackId="w" fill="transparent" isAnimationActive={false} />
           <Bar dataKey="span" stackId="w" radius={[4, 4, 4, 4]} maxBarSize={32} isAnimationActive={false}>
             {data.map((d) => (
-              <Cell
-                key={d.label}
-                fill={
-                  d.label === "Left"
-                    ? left < 0
-                      ? "var(--neg)"
-                      : "var(--pos)"
-                    : d.total
-                      ? "var(--chart-bar-current)"
-                      : "var(--chart-bar)"
-                }
-              />
+              <Cell key={d.label} fill={d.amount < 0 ? (d.total ? C.over : C.accent) : C.income} />
             ))}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
-    </div>
+    </VStack>
   );
 }
 
@@ -290,25 +323,37 @@ export function PatternStrip({
   label: string;
 }) {
   const max = Math.max(1, ...values);
+  const w = 100 / Math.max(1, values.length);
   return (
-    <div className="flex flex-col gap-1" role="img" aria-label={label}>
-      <div className="flex gap-0.5">
+    <VStack gap={1} role="img" aria-label={label}>
+      <svg className="h-8 w-full" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden>
         {values.map((v, i) => (
-          <div
+          <rect
             // biome-ignore lint/suspicious/noArrayIndexKey: fixed buckets
             key={i}
-            title={`${labels[i]}: ${v}`}
-            className="h-8 flex-1 rounded-chip bg-fg"
-            style={{ opacity: v === 0 ? 0.06 : 0.15 + 0.85 * (v / max) }}
-          />
+            x={i * w + 0.25}
+            width={w - 0.5}
+            height={32}
+            rx={1}
+            fill={C.accent}
+            fillOpacity={v === 0 ? 0.08 : 0.15 + 0.85 * (v / max)}
+          >
+            <title>{`${labels[i]}: ${v}`}</title>
+          </rect>
         ))}
-      </div>
-      <div className="flex justify-between text-xs text-fg-muted">
-        <span>{labels[0]}</span>
-        <span>{labels[Math.floor(labels.length / 2)]}</span>
-        <span>{labels.at(-1)}</span>
-      </div>
-    </div>
+      </svg>
+      <HStack justify="between">
+        <Text type="supporting" size="xsm">
+          {labels[0]}
+        </Text>
+        <Text type="supporting" size="xsm">
+          {labels[Math.floor(labels.length / 2)]}
+        </Text>
+        <Text type="supporting" size="xsm">
+          {labels.at(-1)}
+        </Text>
+      </HStack>
+    </VStack>
   );
 }
 
@@ -321,7 +366,7 @@ export function DailyBars({
   average?: number | null;
 }) {
   return (
-    <div className="h-40 w-full" data-testid="daily-bars">
+    <VStack className="h-40 w-full" data-testid="daily-bars">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 0, bottom: 0, left: 0 }} barCategoryGap={1}>
           <XAxis
@@ -336,45 +381,37 @@ export function DailyBars({
           />
           <YAxis hide domain={[0, "dataMax"]} />
           <Tooltip
-            cursor={{ fill: "var(--surface-2)" }}
+            cursor={{ fill: C.cursor }}
             content={({ active, payload }) => {
               const p = payload?.[0]?.payload as { date: string; value: number } | undefined;
               if (!active || !p) return null;
               return (
-                <TipBox>
-                  <div className="text-fg-muted">
-                    {Number(p.date.slice(8, 10))} {monthShort(p.date.slice(0, 7))}
-                  </div>
-                  <div className="font-medium">{formatRs(p.value)}</div>
+                <TipBox title={dayTitle(p.date)}>
+                  <Tip strong>{formatRs(p.value)}</Tip>
                 </TipBox>
               );
             }}
           />
           {average ? (
-            <ReferenceLine
-              y={average}
-              stroke="var(--fg-muted)"
-              strokeDasharray="4 4"
-              ifOverflow="extendDomain"
-            />
+            <ReferenceLine y={average} stroke={C.muted} strokeDasharray="4 4" ifOverflow="extendDomain" />
           ) : null}
           <Bar
             dataKey="value"
-            fill="var(--chart-bar-current)"
+            fill={C.accent}
             radius={[2, 2, 0, 0]}
             maxBarSize={10}
             isAnimationActive={false}
           />
         </BarChart>
       </ResponsiveContainer>
-    </div>
+    </VStack>
   );
 }
 
 /** Closing balance at the end of each day. */
 export function BalanceLine({ data }: { data: { date: string; closing: number }[] }) {
   return (
-    <div className="h-40 w-full" data-testid="balance-line">
+    <VStack className="h-40 w-full" data-testid="balance-line">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 8, right: 4, bottom: 0, left: 0 }}>
           <XAxis
@@ -396,16 +433,13 @@ export function BalanceLine({ data }: { data: { date: string; closing: number }[
             domain={["auto", "auto"]}
           />
           <Tooltip
-            cursor={{ stroke: "var(--border-strong)" }}
+            cursor={{ stroke: C.rule }}
             content={({ active, payload }) => {
               const p = payload?.[0]?.payload as { date: string; closing: number } | undefined;
               if (!active || !p) return null;
               return (
-                <TipBox>
-                  <div className="text-fg-muted">
-                    {Number(p.date.slice(8, 10))} {monthShort(p.date.slice(0, 7))}
-                  </div>
-                  <div className="font-medium">{formatRs(p.closing)}</div>
+                <TipBox title={dayTitle(p.date)}>
+                  <Tip strong>{formatRs(p.closing)}</Tip>
                 </TipBox>
               );
             }}
@@ -413,14 +447,14 @@ export function BalanceLine({ data }: { data: { date: string; closing: number }[
           <Line
             type="stepAfter"
             dataKey="closing"
-            stroke="var(--chart-bar-current)"
+            stroke={C.accent}
             strokeWidth={2}
             dot={false}
             isAnimationActive={false}
           />
         </LineChart>
       </ResponsiveContainer>
-    </div>
+    </VStack>
   );
 }
 
@@ -437,24 +471,21 @@ export interface ProjectionPoint {
 export function ProjectionChart({ data, showDebt }: { data: ProjectionPoint[]; showDebt?: boolean }) {
   const rows = data.map((d) => ({ ...d, band: [d.low, d.high] as [number, number] }));
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap gap-4 text-sm text-fg-muted" aria-hidden>
-        <span className="inline-flex items-center gap-2">
-          <span className="h-0.5 w-4 rounded-full bg-[var(--chart-bar-current)]" />
-          Savings, expected
-        </span>
-        <span className="inline-flex items-center gap-2">
-          <span className="h-2 w-4 rounded-chip bg-[var(--chart-band)]" />
+    <VStack gap={2}>
+      <HStack gap={4} wrap="wrap" aria-hidden>
+        <Key color={C.accent} shape="line">
+          Savings
+        </Key>
+        <Key color={C.soft} shape="band">
           Best–worst
-        </span>
+        </Key>
         {showDebt ? (
-          <span className="inline-flex items-center gap-2">
-            <span className="h-0.5 w-4 rounded-full bg-[var(--neg)]" />
+          <Key color={C.over} shape="line">
             Debt
-          </span>
+          </Key>
         ) : null}
-      </div>
-      <div className="h-56 w-full" data-testid="projection-chart">
+      </HStack>
+      <VStack className="h-56 w-full" data-testid="projection-chart">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={rows} margin={{ top: 8, right: 4, bottom: 0, left: 0 }}>
             <XAxis
@@ -466,7 +497,7 @@ export function ProjectionChart({ data, showDebt }: { data: ProjectionPoint[]; s
               interval={0}
             />
             <YAxis tick={AXIS} axisLine={false} tickLine={false} width={40} tickFormatter={compact} />
-            <ReferenceLine y={0} stroke="var(--border-strong)" />
+            <ReferenceLine y={0} stroke={C.rule} />
             {data
               .filter((d) => d.risk)
               .map((d) => (
@@ -474,57 +505,42 @@ export function ProjectionChart({ data, showDebt }: { data: ProjectionPoint[]; s
                   key={d.month}
                   x1={d.month}
                   x2={d.month}
-                  fill="var(--warn-soft)"
+                  fill={C.warnSoft}
                   fillOpacity={1}
                   ifOverflow="visible"
                 />
               ))}
             <Tooltip
-              cursor={{ stroke: "var(--border-strong)" }}
+              cursor={{ stroke: C.rule }}
               content={({ active, payload }) => {
                 const p = payload?.[0]?.payload as ProjectionPoint | undefined;
                 if (!active || !p) return null;
                 return (
-                  <TipBox>
-                    <div className="text-fg-muted">
-                      {monthShort(p.month)} {p.month.slice(0, 4)}
-                    </div>
-                    <div className="font-medium">Savings {formatRs(p.expected)}</div>
-                    <div className="text-fg-muted">
+                  <TipBox title={monthTitle(p.month)}>
+                    <Tip strong>Savings {formatRs(p.expected)}</Tip>
+                    <Tip className="text-fg-muted">
                       {formatRs(p.low)} – {formatRs(p.high)}
-                    </div>
-                    {showDebt && p.debt ? <div>Debt {formatRs(p.debt)}</div> : null}
-                    {p.risk ? <div className="text-warn">Tight month</div> : null}
+                    </Tip>
+                    {showDebt && p.debt ? <Tip>Debt {formatRs(p.debt)}</Tip> : null}
+                    {p.risk ? <Tip className="text-warn">Tight month</Tip> : null}
                   </TipBox>
                 );
               }}
             />
-            <Area
-              dataKey="band"
-              stroke="none"
-              fill="var(--chart-band)"
-              fillOpacity={1}
-              isAnimationActive={false}
-            />
+            <Area dataKey="band" stroke="none" fill={C.soft} fillOpacity={1} isAnimationActive={false} />
             <Line
               dataKey="expected"
-              stroke="var(--chart-bar-current)"
+              stroke={C.accent}
               strokeWidth={2}
               dot={false}
               isAnimationActive={false}
             />
             {showDebt ? (
-              <Line
-                dataKey="debt"
-                stroke="var(--neg)"
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-              />
+              <Line dataKey="debt" stroke={C.over} strokeWidth={2} dot={false} isAnimationActive={false} />
             ) : null}
           </ComposedChart>
         </ResponsiveContainer>
-      </div>
-    </div>
+      </VStack>
+    </VStack>
   );
 }

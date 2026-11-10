@@ -1,3 +1,9 @@
+import { Badge } from "@astryxdesign/core/Badge";
+import { Card } from "@astryxdesign/core/Card";
+import { HStack } from "@astryxdesign/core/HStack";
+import { List, ListItem } from "@astryxdesign/core/List";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import {
   addMonths,
   availableMonths,
@@ -6,6 +12,7 @@ import {
   isClosed,
   monthLabel,
   monthOf,
+  netPosition,
   openingInfo,
   trackingStartMonth,
   walletMonthDetail,
@@ -14,9 +21,9 @@ import type { AccountId, Transaction } from "@marqum/schema";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { BalanceSheet } from "../components/balance-sheet.tsx";
+import { WalletLogo } from "../components/brand-logo.tsx";
 import { BalanceLine } from "../components/charts.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
-import { Money } from "../components/money.tsx";
 import { MonthPager } from "../components/month-pager.tsx";
 import { Screen, Section } from "../components/shell.tsx";
 import { TagSheet } from "../components/tag-sheet.tsx";
@@ -34,7 +41,7 @@ export function WalletScreen({ id, month }: { id: AccountId; month?: string | un
       {ds ? (
         <WalletContent ds={ds} now={now} id={id} month={month ?? monthOf(now)} />
       ) : (
-        <Skeleton className="h-40 rounded-card" />
+        <Skeleton height={160} />
       )}
     </Screen>
   );
@@ -75,47 +82,77 @@ function WalletContent({ ds, now, id, month }: { ds: Dataset; now: string; id: A
   const go = (m: string) =>
     void navigate({ to: "/wallet/$id", params: { id }, search: { month: m }, replace: true });
   const current = month === monthOf(now);
+  const pos = useMemo(() => netPosition(ds, now).wallets.find((w) => w.account_id === id), [ds, now, id]);
+  const below = current && pos && pos.floor !== null && pos.balance < pos.floor ? pos.floor - pos.balance : 0;
+  const unverified = current && pos ? pos.provisional_delta : 0;
+  const ledger: { label: string; value: string; total?: boolean }[] = [
+    {
+      label: firstMonth
+        ? `Opening · ${opening.source === "statement" ? "statement" : opening.source === "you" ? "set by you" : "not set"}`
+        : `Brought forward from ${monthLabel(addMonths(month, -1))}`,
+      value: formatRs(d.brought_forward),
+    },
+    { label: "Money in", value: formatRs(d.inflow, { sign: d.inflow > 0 }) },
+    { label: "Money out", value: formatRs(-d.outflow) },
+    {
+      label: d.carried_forward !== null ? `Carried forward to ${monthLabel(addMonths(month, 1))}` : "Closing",
+      value: formatRs(d.closing),
+      total: true,
+    },
+  ];
 
   return (
     <>
       <MonthPager months={months} month={month} onChange={go}>
-        <div className="flex flex-col gap-2" data-testid="wallet-closing">
-          <Money value={d.closing} className="font-display text-hero font-medium" />
-          <p className="text-sm text-fg-muted">
-            {current ? "balance now" : `closing balance, ${monthLabel(month)}`}
-          </p>
-          {current ? (
-            <Button variant="text" size="sm" className="self-start" onClick={() => setMatching(true)}>
+        <Card
+          {...(id === "sadapay" || id === "nayapay" ? { variant: id } : {})}
+          padding={5}
+          data-testid="wallet-closing"
+        >
+          <VStack gap={3}>
+            <HStack gap={2} vAlign="center" justify="between">
+              <Text type="label" color="inherit">
+                {current ? "Now" : `Closing · ${monthLabel(month)}`}
+              </Text>
+              {id === "sadapay" || id === "nayapay" ? <WalletLogo id={id} size={28} /> : null}
+            </HStack>
+            <Text type="display-2" color="inherit" hasTabularNumbers>
+              {formatRs(d.closing)}
+            </Text>
+            {below || unverified ? (
+              <HStack gap={2} wrap="wrap">
+                {below ? <Badge variant="warning" label={`${formatRs(below)} below floor`} /> : null}
+                {unverified ? (
+                  <Badge variant="neutral" label={`${formatRs(unverified, { sign: true })} unverified`} />
+                ) : null}
+              </HStack>
+            ) : null}
+          </VStack>
+        </Card>
+        {current ? (
+          <HStack>
+            <Button variant="text" size="sm" onClick={() => setMatching(true)}>
               Check against the bank app
             </Button>
-          ) : null}
-        </div>
-        <dl className="flex flex-col gap-2 text-sm" data-testid="wallet-ledger">
-          <div className="flex justify-between gap-4">
-            <dt className="text-fg-muted">
-              {firstMonth
-                ? `Opening balance · ${opening.source === "statement" ? "from statement" : opening.source === "you" ? "set by you" : "not set"}`
-                : `Brought forward from ${monthLabel(addMonths(month, -1))}`}
-            </dt>
-            <dd className="num">{formatRs(d.brought_forward)}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-fg-muted">Money in</dt>
-            <dd className="num">{formatRs(d.inflow, { sign: d.inflow > 0 })}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-fg-muted">Money out</dt>
-            <dd className="num">{formatRs(-d.outflow)}</dd>
-          </div>
-          <div className="flex justify-between gap-4 border-border border-t pt-2 font-medium">
-            <dt>
-              {d.carried_forward !== null
-                ? `Carried forward to ${monthLabel(addMonths(month, 1))}`
-                : "Closing"}
-            </dt>
-            <dd className="num">{formatRs(d.closing)}</dd>
-          </div>
-        </dl>
+          </HStack>
+        ) : null}
+        <List density="compact" edge="flush" data-testid="wallet-ledger">
+          {ledger.map((r) => (
+            <ListItem
+              key={r.label}
+              label={
+                <Text {...(r.total ? { weight: "semibold" as const } : { color: "secondary" as const })}>
+                  {r.label}
+                </Text>
+              }
+              endContent={
+                <Text hasTabularNumbers {...(r.total ? { weight: "semibold" as const } : {})}>
+                  {r.value}
+                </Text>
+              }
+            />
+          ))}
+        </List>
         <BalanceLine data={current ? d.daily.filter((x) => x.date <= now.slice(0, 10)) : d.daily} />
       </MonthPager>
 

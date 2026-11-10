@@ -1,8 +1,13 @@
+import { Grid } from "@astryxdesign/core/Grid";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import type { Dataset } from "@marqum/core";
 import { useState } from "react";
 import { cn } from "../lib/cn.ts";
 import { childrenOf, visibleTopCategories } from "../lib/view.ts";
 import { CategoryIcon } from "./category-icon.tsx";
+import { Button } from "./ui/button.tsx";
 import { Chip } from "./ui/controls.tsx";
 
 /** Category grid (parent) → subcategory chips. Selection is the accent. */
@@ -28,8 +33,8 @@ export function CategoryPicker({
     ds.categories.filter((c) => c.parent_id === null).length - visibleTopCategories(ds).length;
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4" role="listbox" aria-label="Category">
+    <VStack gap={3}>
+      <Grid columns={{ minWidth: 88, max: 4 }} gap={2} role="listbox" aria-label="Category">
         {tops.map((c) => {
           const selected = parentId === c.id;
           const isSuggested = !value && suggested && (suggested === c.id || suggested.startsWith(`${c.id}.`));
@@ -41,7 +46,7 @@ export function CategoryPicker({
               aria-selected={selected}
               onClick={() => onChange(selected && value === c.id ? null : c.id)}
               className={cn(
-                "flex flex-col items-center gap-1 rounded-control border px-1 py-3 text-xs transition-colors",
+                "flex min-w-0 flex-col items-center gap-1 rounded-control border px-1 py-3 transition-colors",
                 selected
                   ? "border-accent bg-accent text-accent-fg"
                   : isSuggested
@@ -50,13 +55,21 @@ export function CategoryPicker({
               )}
             >
               <CategoryIcon name={c.icon} />
-              <span className="w-full truncate text-center">{c.name}</span>
+              <Text
+                type="supporting"
+                color="inherit"
+                maxLines={1}
+                justify="center"
+                hasTruncateTooltip={false}
+              >
+                {c.name}
+              </Text>
             </button>
           );
         })}
-      </div>
+      </Grid>
       {subs.length > 0 ? (
-        <fieldset className="flex flex-wrap gap-2" aria-label="Subcategory">
+        <HStack as="fieldset" gap={2} wrap="wrap" aria-label="Subcategory">
           {subs.map((s) => (
             <Chip
               key={s.id}
@@ -66,17 +79,15 @@ export function CategoryPicker({
               {s.name}
             </Chip>
           ))}
-        </fieldset>
+        </HStack>
       ) : null}
       {!showAll && hiddenCount > 0 ? (
-        <button
-          type="button"
-          className="self-start text-sm text-fg underline decoration-border-strong underline-offset-4"
-          onClick={() => setShowAll(true)}
-        >
-          Show {hiddenCount} more categories
-        </button>
+        <HStack>
+          <Button variant="text" size="sm" onClick={() => setShowAll(true)}>
+            {`+${hiddenCount} more`}
+          </Button>
+        </HStack>
       ) : null}
-    </div>
+    </VStack>
   );
 }

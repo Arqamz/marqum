@@ -1,5 +1,11 @@
+import { Badge } from "@astryxdesign/core/Badge";
+import { Card } from "@astryxdesign/core/Card";
+import { HStack } from "@astryxdesign/core/HStack";
+import { List, ListItem } from "@astryxdesign/core/List";
+import { ProgressBar } from "@astryxdesign/core/ProgressBar";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import {
-  addMonths,
   availableMonths,
   categoryMonthDetail,
   categorySeries,
@@ -7,11 +13,10 @@ import {
   daysInMonth,
   formatRs,
   isClosed,
-  monthLabel,
   monthOf,
 } from "@marqum/core";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowDown, ArrowUp, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { AddToCategorySheet } from "../components/add-to-category.tsx";
 import { DailyBars, MonthlyBars } from "../components/charts.tsx";
@@ -24,8 +29,8 @@ import { TagSheet } from "../components/tag-sheet.tsx";
 import { TxnList } from "../components/txn-list.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Skeleton } from "../components/ui/controls.tsx";
-import { cn } from "../lib/cn.ts";
 import { monthName } from "../lib/months.ts";
+import { opt } from "../lib/opt.ts";
 import { lookup } from "../lib/view.ts";
 
 export function CategoryScreen({ id, month }: { id: string; month?: string | undefined }) {
@@ -40,8 +45,13 @@ export function CategoryScreen({ id, month }: { id: string; month?: string | und
       {...(name ? { title: name } : {})}
       actions={
         category ? (
-          <Button variant="primary" size="sm" onClick={() => setAdding(true)} data-testid="category-add">
-            <Plus aria-hidden />
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Plus aria-hidden />}
+            onClick={() => setAdding(true)}
+            data-testid="category-add"
+          >
             Add
           </Button>
         ) : null
@@ -53,10 +63,10 @@ export function CategoryScreen({ id, month }: { id: string; month?: string | und
       {ds ? (
         <CategoryContent ds={ds} now={now} id={id} month={month ?? monthOf(now)} />
       ) : (
-        <div className="flex flex-col gap-4">
-          <Skeleton className="h-8 w-3/4" />
-          <Skeleton className="h-40 rounded-card" />
-        </div>
+        <VStack gap={4}>
+          <Skeleton height={32} width="75%" />
+          <Skeleton height={160} />
+        </VStack>
       )}
     </Screen>
   );
@@ -88,52 +98,68 @@ function CategoryContent({ ds, now, id, month }: { ds: Dataset; now: string; id:
   const go = (m: string) =>
     void navigate({ to: "/category/$id", params: { id }, search: { month: m }, replace: true });
 
-  if (!category) return <p className="text-fg-muted">That category no longer exists.</p>;
-  const current = month === monthOf(now);
+  if (!category) return <Text color="secondary">That category no longer exists.</Text>;
   const avg = detail.average;
-  const over = avg !== null && detail.total > avg;
-  const dailyAvg = avg ? Math.round(avg / daysInMonth(month)) : null;
+  const target = category.budget ?? avg;
   const outliers = series.filter((p) => p.outlier && p.month !== monthOf(now));
+  const dailyAvg = avg ? Math.round(avg / daysInMonth(month)) : null;
+  // Pace: how much of the target should be gone by today (all of it for a past month).
+  const elapsed = month === monthOf(now) ? Number(now.slice(8, 10)) / daysInMonth(month) : 1;
+  const pace: "success" | "warning" | "error" | null =
+    target === null || target <= 0
+      ? null
+      : detail.total > target
+        ? "error"
+        : detail.total > target * elapsed
+          ? "warning"
+          : "success";
+  const vsAvg = avg ? Math.round(((detail.total - avg) / avg) * 100) : null;
 
   return (
     <>
       <MonthPager months={months} month={month} onChange={go}>
-        <div className="flex flex-col gap-2" data-testid="category-total">
-          <Money
-            value={detail.total}
-            className="font-display text-hero font-medium"
-            {...(avg === null ? {} : { tone: over ? ("neg" as const) : ("pos" as const) })}
-          />
-          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted">
-            <span className="num">{avg === null ? "no average yet" : `avg ${formatRs(avg)}`}</span>
-            {detail.change_pct !== null ? (
-              <span className="num inline-flex items-center gap-1">
-                {Math.round(detail.change_pct) === 0 ? null : detail.change_pct > 0 ? (
-                  <ArrowUp aria-hidden />
-                ) : (
-                  <ArrowDown aria-hidden />
-                )}
-                {Math.round(detail.change_pct) === 0
-                  ? `same as ${monthLabel(addMonths(month, -1)).slice(0, 3)}`
-                  : `${Math.abs(detail.change_pct).toFixed(0)}% from ${monthLabel(addMonths(month, -1)).slice(0, 3)}`}
-              </span>
+        <Card data-testid="category-total">
+          <VStack gap={3}>
+            <HStack justify="between" vAlign="center" gap={3}>
+              <Money
+                value={detail.total}
+                className="font-display text-hero font-medium"
+                {...opt({ tone: pace === "error" ? ("neg" as const) : undefined })}
+              />
+              {vsAvg !== null && vsAvg !== 0 ? (
+                <Badge
+                  label={`${vsAvg > 0 ? "▲" : "▼"} ${Math.abs(vsAvg)}%`}
+                  variant={vsAvg > 0 ? "error" : "success"}
+                />
+              ) : null}
+            </HStack>
+            {target !== null && pace !== null ? (
+              <ProgressBar
+                label={category.budget ? "Spent of budget" : "Spent of average"}
+                isLabelHidden
+                value={Math.min(detail.total, target)}
+                max={target}
+                variant={pace}
+              />
             ) : null}
-            {current ? <span>so far this month</span> : null}
-          </p>
-        </div>
+            <HStack gap={3} wrap="wrap">
+              <Text type="supporting" hasTabularNumbers>
+                {avg === null ? "no average yet" : `avg ${formatRs(avg)}`}
+              </Text>
+              {category.budget ? (
+                <Text type="supporting" hasTabularNumbers>
+                  budget {formatRs(category.budget)}
+                </Text>
+              ) : null}
+            </HStack>
+          </VStack>
+        </Card>
         <DailyBars data={detail.daily} average={dailyAvg} />
       </MonthPager>
 
       <Section
         title="Last 12 months"
-        aside={
-          outliers.length > 0 ? (
-            <span className="inline-flex items-center gap-2 text-sm text-fg-muted">
-              <span className="size-2 rounded-full bg-[var(--warn-line)]" aria-hidden />
-              {outliers.length === 1 ? "1 unusual month" : `${outliers.length} unusual months`}
-            </span>
-          ) : null
-        }
+        aside={outliers.length > 0 ? <Badge label={`${outliers.length} unusual`} variant="warning" /> : null}
       >
         <MonthlyBars
           average={avg}
@@ -149,30 +175,39 @@ function CategoryContent({ ds, now, id, month }: { ds: Dataset; now: string; id:
 
       {detail.parts.length > 0 ? (
         <Section title={`${category.name} in ${monthName(month)}`}>
-          <ul className="flex flex-col gap-4" data-testid="parts">
+          <List data-testid="parts" edge="flush">
             {detail.parts
               .filter((p) => p.spent > 0 || (p.average ?? 0) > 0)
               .map((p) => (
-                <li key={p.id} className="flex flex-col gap-2">
-                  <div className="flex items-baseline justify-between gap-4 text-sm">
-                    <span className="min-w-0 truncate">{p.name}</span>
-                    <span className="flex items-baseline gap-3">
-                      <span className="num text-fg-muted">{Math.round(p.share * 100)}%</span>
+                <ListItem
+                  key={p.id}
+                  label={p.name}
+                  description={
+                    <VStack gap={1}>
+                      <ProgressBar
+                        label={p.name}
+                        isLabelHidden
+                        value={Math.round(p.share * 100)}
+                        variant="accent"
+                      />
+                      {p.average ? (
+                        <Text type="supporting" hasTabularNumbers>
+                          avg {formatRs(p.average)}
+                        </Text>
+                      ) : null}
+                    </VStack>
+                  }
+                  endContent={
+                    <HStack gap={3} vAlign="center">
+                      <Text type="supporting" hasTabularNumbers>
+                        {Math.round(p.share * 100)}%
+                      </Text>
                       <Money value={p.spent} className="font-medium" />
-                    </span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-surface-2">
-                    <div
-                      className={cn("h-1.5 rounded-full bg-[var(--chart-bar-current)]")}
-                      style={{ width: `${Math.max(p.spent > 0 ? 2 : 0, p.share * 100)}%` }}
-                    />
-                  </div>
-                  {p.average ? (
-                    <span className="num text-sm text-fg-muted">avg {formatRs(p.average)}</span>
-                  ) : null}
-                </li>
+                    </HStack>
+                  }
+                />
               ))}
-          </ul>
+          </List>
         </Section>
       ) : null}
 
@@ -187,10 +222,7 @@ function CategoryContent({ ds, now, id, month }: { ds: Dataset; now: string; id:
             isClosedMonth={(m) => isClosed(ds, m)}
           />
         ) : detail.expected.length === 0 ? (
-          <p className="text-fg-muted">
-            Nothing on {category.name.toLowerCase()} in {monthName(month)}. Add a transaction or a
-            subscription with Add.
-          </p>
+          <Text color="secondary">Nothing in {monthName(month)}.</Text>
         ) : null}
       </Section>
       <TagSheet
