@@ -128,7 +128,7 @@ function closedTouches(ds: Dataset, mutations: Mutation[]): ClosedTouch {
 }
 
 function guardClosed(ds: Dataset, cmd: Command, ctx: ExecContext, out: Outcome): Outcome {
-  if (!out.ok || cmd.name === "mergeCounterparties" || cmd.name === "resetLedger") return out;
+  if (!out.ok || cmd.name === "resetLedger") return out;
   const touch = closedTouches(ds, out.mutations);
   if (touch.months.size === 0) return out;
   const months = [...touch.months].sort().map(monthLabel).join(", ");
@@ -637,6 +637,47 @@ function restoreTransaction(ds: Dataset, a: CommandArgs<"restoreTransaction">, c
   return ok([mut("transactions", row)]);
 }
 
+function editProvisional(ds: Dataset, a: CommandArgs<"editProvisional">, ctx: ExecContext): Outcome {
+  const t = findTxn(ds, a.txn_id);
+  if (!t) return fail("not_found", `transaction ${a.txn_id} not found`);
+  if (t.status === "verified" || t.source === "system")
+    return fail("invalid", "verified transactions come from statements and can't be changed");
+  if (a.amount === 0) return fail("invalid", "amount must not be zero");
+  if (a.occurred_at < `${trackingStart(ds)}T00:00`) return fail("invalid", beforeStart(ds));
+  // a flow that only fits one direction falls back to the plain one for the new direction
+  const IN_ONLY: Flow[] = ["income", "reimbursement", "loan_in", "funding"];
+  const OUT_ONLY: Flow[] = ["spend", "fee", "loan_repay"];
+  const flipped = Math.sign(a.amount) !== Math.sign(t.amount);
+  const flow: Flow = !flipped
+    ? t.flow
+    : a.amount > 0
+      ? OUT_ONLY.includes(t.flow)
+        ? "income"
+        : t.flow
+      : IN_ONLY.includes(t.flow)
+        ? "spend"
+        : t.flow;
+  return ok([
+    mut("transactions", {
+      ...t,
+      amount: a.amount,
+      occurred_at: a.occurred_at,
+      account_id: a.account_id,
+      flow,
+      ...(flipped ? { linked_txn_id: null, loan_id: null } : {}),
+      status: "provisional",
+      updated_at: ctx.now,
+    }),
+  ]);
+}
+
+function deleteBalance(ds: Dataset, a: CommandArgs<"deleteBalance">): Outcome {
+  const b = ds.balances.find((x) => x.id === a.entry_id && !x.deleted);
+  if (!b) return fail("not_found", `balance ${a.entry_id} not found`);
+  if (b.source !== "manual") return fail("invalid", "only balances you typed can be removed");
+  return ok([tombstone("balances", b)]);
+}
+
 function resolveDisputed(ds: Dataset, a: CommandArgs<"resolveDisputed">, ctx: ExecContext): Outcome {
   const t = findTxn(ds, a.txn_id);
   if (!t) return fail("not_found", `transaction ${a.txn_id} not found`);
@@ -1063,6 +1104,10 @@ function run(ds: Dataset, c: Command, ctx: ExecContext): Outcome {
       return deleteProvisional(ds, c.args, ctx);
     case "tagTransaction":
       return tagTransaction(ds, c.args, ctx);
+    case "editProvisional":
+      return editProvisional(ds, c.args, ctx);
+    case "deleteBalance":
+      return deleteBalance(ds, c.args);
     case "restoreTransaction":
       return restoreTransaction(ds, c.args, ctx);
     case "deleteLoan":

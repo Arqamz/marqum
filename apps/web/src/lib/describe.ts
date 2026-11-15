@@ -5,6 +5,8 @@ const NAMES: Record<Command["name"], string> = {
   addProvisional: "Quick-add",
   deleteProvisional: "Delete",
   restoreTransaction: "Restore",
+  editProvisional: "Edit",
+  deleteBalance: "Balance delete",
   tagTransaction: "Tag",
   resolveDisputed: "Resolve",
   recordBalance: "Balance",

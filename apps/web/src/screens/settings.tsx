@@ -28,7 +28,7 @@ import {
 import type { AccountId, NotificationIngest } from "@marqum/schema";
 import { API } from "@marqum/schema";
 import { useNavigate } from "@tanstack/react-router";
-import { Bell, Trash2, TriangleAlert } from "lucide-react";
+import { Bell, ChevronRight, TriangleAlert } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { BalanceSheet } from "../components/balance-sheet.tsx";
 import { CategoryIcon } from "../components/category-icon.tsx";
@@ -37,6 +37,7 @@ import { Money } from "../components/money.tsx";
 import { openQuickAdd } from "../components/quick-add.tsx";
 import { Headline, Screen } from "../components/shell.tsx";
 import { Button } from "../components/ui/button.tsx";
+import { ConfirmButton } from "../components/ui/confirm-button.tsx";
 import { Segmented, Skeleton, Switch } from "../components/ui/controls.tsx";
 import { Field, Input, MoneyInput } from "../components/ui/input.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
@@ -424,13 +425,14 @@ function DevicesSection() {
         after:
           temporary.length > 1 ? (
             <HStack>
-              <Button
+              <ConfirmButton
                 variant="secondary"
-                loading={busy === "temporary"}
-                onClick={() => void remove("temporary", temporary)}
-              >
-                Remove {temporary.length} temporary
-              </Button>
+                width={null}
+                disabled={busy === "temporary"}
+                label={`Remove ${temporary.length} temporary`}
+                confirm={`Tap again: sign out ${temporary.length} devices`}
+                onConfirm={() => void remove("temporary", temporary)}
+              />
             </HStack>
           ) : undefined,
       })}
@@ -447,15 +449,14 @@ function DevicesSection() {
             mine(d) ? (
               <Badge label="This device" variant="info" />
             ) : (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Sign out ${d.name}`}
-                loading={busy === d.id}
-                onClick={() => void remove(d.id, [d])}
-              >
-                <Trash2 aria-hidden />
-              </Button>
+              <ConfirmButton
+                size="sm"
+                width={null}
+                disabled={busy === d.id}
+                label="Sign out"
+                confirm={`Tap again: sign out ${d.name}`}
+                onConfirm={() => void remove(d.id, [d])}
+              />
             )
           }
         />
@@ -476,6 +477,14 @@ function RulesSheet({
   const l = lookup(ds);
   const [pattern, setPattern] = useState("");
   const [category, setCategory] = useState("");
+  // the rule being edited (tap a rule to edit it); null = adding a new one
+  const [editing, setEditing] = useState<string | null>(null);
+  const editingRule = ds.rules.find((r) => r.id === editing);
+  const reset = () => {
+    setEditing(null);
+    setPattern("");
+    setCategory("");
+  };
   const tops = ds.categories.filter((c) => c.parent_id === null).sort((a, b) => a.sort - b.sort);
   const options = ds.categories
     .slice()
@@ -527,14 +536,14 @@ function RulesSheet({
               e.preventDefault();
               if (!pattern.trim() || !category) return;
               void enqueue("upsertRule", {
-                rule_id: newId(),
+                rule_id: editingRule?.id ?? newId(),
                 pattern: pattern.trim(),
                 category_id: category,
-                flow: null,
-                counterparty_id: null,
-                priority: 1000,
+                flow: editingRule?.flow ?? null,
+                counterparty_id: editingRule?.counterparty_id ?? null,
+                priority: editingRule?.priority ?? 1000,
               });
-              setPattern("");
+              reset();
             }}
           >
             <HStack gap={2} vAlign="end">
@@ -562,8 +571,29 @@ function RulesSheet({
               </StackItem>
             </HStack>
             <Button type="submit" variant="secondary" disabled={!pattern.trim() || !category}>
-              Add rule
+              {editingRule
+                ? `Save rule “${describeRule(pattern.trim() || editingRule.pattern)}”`
+                : "Add rule"}
             </Button>
+            {editingRule ? (
+              <HStack gap={2}>
+                <StackItem size="fill">
+                  <ConfirmButton
+                    label="Delete rule"
+                    confirm={`Tap again: delete “${describeRule(editingRule.pattern)}”`}
+                    onConfirm={() => {
+                      void enqueue("deleteRule", { rule_id: editingRule.id });
+                      reset();
+                    }}
+                  />
+                </StackItem>
+                <StackItem size="fill">
+                  <Button variant="ghost" width="full" onClick={reset}>
+                    Cancel
+                  </Button>
+                </StackItem>
+              </HStack>
+            ) : null}
           </VStack>
           <List hasDividers density="compact">
             {[...ds.rules]
@@ -577,16 +607,13 @@ function RulesSheet({
                       ? (l.category.get(r.category_id)?.name ?? r.category_id)
                       : (r.flow ?? undefined),
                   })}
-                  endContent={
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Delete rule"
-                      onClick={() => void enqueue("deleteRule", { rule_id: r.id })}
-                    >
-                      <Trash2 aria-hidden />
-                    </Button>
-                  }
+                  {...(r.id === editing ? { isSelected: true } : {})}
+                  onClick={() => {
+                    setEditing(r.id);
+                    setPattern(r.pattern);
+                    setCategory(r.category_id ?? "");
+                  }}
+                  endContent={<ChevronRight className="shrink-0 text-fg-subtle" aria-hidden />}
                 />
               ))}
           </List>

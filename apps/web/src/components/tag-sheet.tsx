@@ -14,10 +14,12 @@ import {
   daysBetween,
   formatRs,
   isClosed,
+  karachiNow,
   monthLabel,
   monthOf,
   parseRs,
   rememberRule,
+  trackingStart,
 } from "@marqum/core";
 import type { Flow, Transaction } from "@marqum/schema";
 import { ChevronRight } from "lucide-react";
@@ -32,8 +34,9 @@ import { CategoryPicker } from "./category-picker.tsx";
 import { useDataset } from "./dataset-provider.tsx";
 import { Money } from "./money.tsx";
 import { Button } from "./ui/button.tsx";
+import { ConfirmButton } from "./ui/confirm-button.tsx";
 import { Chip, Segmented, Switch } from "./ui/controls.tsx";
-import { MoneyInput } from "./ui/input.tsx";
+import { Field, Input, MoneyInput } from "./ui/input.tsx";
 import { Sheet } from "./ui/sheet.tsx";
 
 /** Tag a transaction: reason (suggests a category as you type), category, flow, links, "always". */
@@ -136,6 +139,18 @@ function TagForm({
     (r) => r.category_id === category && (r.counterparty_id === null || r.counterparty_id === counterparty),
   );
   const [saving, setSaving] = useState(false);
+  // unverified rows: the amount (same direction), time and wallet can be fixed
+  const editable = txn.status !== "verified" && txn.source !== "system";
+  const [fixAmount, setFixAmount] = useState(String(Math.abs(txn.amount) / 100));
+  const [fixAt, setFixAt] = useState(txn.occurred_at);
+  const [fixWallet, setFixWallet] = useState(txn.account_id);
+  const fixedPaisa = parseRs(fixAmount);
+  const newAmount = fixedPaisa ? (txn.amount < 0 ? -Math.abs(fixedPaisa) : Math.abs(fixedPaisa)) : null;
+  const factsChanged =
+    editable &&
+    newAmount !== null &&
+    (newAmount !== txn.amount || fixAt !== txn.occurred_at || fixWallet !== txn.account_id);
+  const factsValid = !editable || (newAmount !== null && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(fixAt));
   const closed = isClosed(ds, monthOf(txn.occurred_at));
   const backing = ds.recurring.find((r) => r.source_txn_id === txn.id && r.active);
   const [repeats, setRepeats] = useState<"no" | "monthly" | "yearly">(backing?.cadence ?? "no");
@@ -231,6 +246,17 @@ function TagForm({
     });
   }
 
+  const stopsTracking = txn.amount < 0 && repeats === "no" && backing !== undefined;
+  const walletName = ds.accounts.find((a) => a.id === fixWallet)?.name ?? "";
+  const saveLabel = [
+    "Save",
+    factsChanged && fixWallet !== txn.account_id ? `move to ${walletName}` : "",
+    factsChanged && newAmount !== null && newAmount !== txn.amount ? `${formatRs(Math.abs(newAmount))}` : "",
+    stopsTracking ? `stop tracking ${backing?.name ?? ""}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   async function save() {
     setSaving(true);
     try {
@@ -238,6 +264,13 @@ function TagForm({
         const ok = await stepUp(`${monthName(monthOf(txn.occurred_at))} is closed`);
         if (!ok) return;
       }
+      if (factsChanged && newAmount !== null)
+        await enqueue("editProvisional", {
+          txn_id: txn.id,
+          amount: newAmount,
+          occurred_at: fixAt,
+          account_id: fixWallet,
+        });
       await saveRepeat();
       const linkedTxn =
         flow === "reimbursement" && linked ? ds.transactions.find((t) => t.id === linked) : undefined;
@@ -288,6 +321,31 @@ function TagForm({
         <Text type="code" color="secondary" wordBreak="break-word">
           {txn.description}
         </Text>
+      ) : null}
+
+      {editable && !closed ? (
+        <VStack gap={3} data-testid="fix-facts">
+          <MoneyInput
+            label={txn.amount < 0 ? "Spent" : "Received"}
+            value={fixAmount}
+            onChange={setFixAmount}
+          />
+          <Field label="When">
+            <Input
+              type="datetime-local"
+              value={fixAt}
+              min={`${trackingStart(ds)}T00:00`}
+              max={karachiNow()}
+              onChange={(e) => setFixAt(e.target.value)}
+            />
+          </Field>
+          <Segmented
+            label="Wallet"
+            value={fixWallet}
+            onValueChange={setFixWallet}
+            options={ds.accounts.map((a) => ({ value: a.id, label: a.name }))}
+          />
+        </VStack>
       ) : null}
 
       <LinkedTxns ds={ds} txn={txn} linked={flow === "reimbursement" ? linked : null} onJump={onJump} />
@@ -431,20 +489,30 @@ function TagForm({
       ) : null}
 
       <VStack gap={2}>
-        <Button type="submit" variant="primary" size="lg" loading={saving} width="full">
-          Save
+        {stopsTracking ? (
+          <Text type="supporting" data-testid="stops-tracking">
+            {`“${backing?.name}” is tracked as a ${backing?.cadence} charge. Saving with “Once” stops tracking it.`}
+          </Text>
+        ) : null}
+        <Button
+          type="submit"
+          variant="primary"
+          size="lg"
+          loading={saving}
+          width="full"
+          disabled={!factsValid}
+        >
+          {saveLabel}
         </Button>
         {txn.status !== "verified" ? (
-          <Button
-            variant="danger"
-            width="full"
-            onClick={() => {
+          <ConfirmButton
+            label="Delete this unverified row"
+            confirm={`Tap again: delete ${formatRs(Math.abs(txn.amount))} · ${txnTitle(txn, lookup(ds))}`}
+            onConfirm={() => {
               void deleteUnverified(txn, ds);
               onDone();
             }}
-          >
-            Delete this unverified row
-          </Button>
+          />
         ) : null}
       </VStack>
     </VStack>

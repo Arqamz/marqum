@@ -16,6 +16,7 @@ import {
   type SubscriptionPreset,
 } from "../lib/recurring.ts";
 import { Button } from "./ui/button.tsx";
+import { ConfirmButton } from "./ui/confirm-button.tsx";
 import { Chip, Segmented } from "./ui/controls.tsx";
 import { MoneyInput } from "./ui/input.tsx";
 
@@ -230,20 +231,18 @@ export function RecurringForm({
       )}
       <Button type="submit" variant="primary" size="lg" disabled={!ok} width="full">
         {recurring
-          ? "Save"
+          ? `Save ${name.trim() || recurring.name}`
           : `Add ${kind === "subscription" ? "subscription" : kind === "bill" ? "bill" : "fixed charge"}`}
       </Button>
       {recurring ? (
-        <Button
-          variant="danger"
-          width="full"
-          onClick={() => {
+        <ConfirmButton
+          label={`Delete ${recurring.name}`}
+          confirm={`Tap again: stop tracking ${recurring.name}`}
+          onConfirm={() => {
             void enqueue("deleteRecurring", { recurring_id: recurring.id });
             onDone();
           }}
-        >
-          Delete
-        </Button>
+        />
       ) : null}
     </VStack>
   );

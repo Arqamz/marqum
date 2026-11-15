@@ -3,7 +3,6 @@ import { Banner } from "@astryxdesign/core/Banner";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Selector } from "@astryxdesign/core/Selector";
-import { StackItem } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
@@ -11,6 +10,7 @@ import {
   addDays,
   availableMonths,
   type Dataset,
+  dayLabel,
   expectedCharges,
   formatRs,
   isClosed,
@@ -30,6 +30,7 @@ import { Headline, Screen } from "../components/shell.tsx";
 import { TagSheet } from "../components/tag-sheet.tsx";
 import { TxnList } from "../components/txn-list.tsx";
 import { Button } from "../components/ui/button.tsx";
+import { ConfirmButton } from "../components/ui/confirm-button.tsx";
 import { Chip, Skeleton } from "../components/ui/controls.tsx";
 import { enqueue } from "../lib/commands.ts";
 import { monthName } from "../lib/months.ts";
@@ -246,30 +247,53 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
         <Banner
           status="warning"
           title={`${disputed.length} not on the statement`}
-          description="A later statement may still have it: card payments can take days to post. Keep it unless you're sure it never happened."
+          description="A later statement may still have it: card payments can take days to post. Keep it, move it to the wallet it really went through, or remove it."
           collapsible={false}
         >
           <VStack gap={2}>
             {disputed.map((t) => (
-              <HStack key={t.id} gap={2} vAlign="center" data-testid="disputed-row">
-                <StackItem size="fill">
-                  <Text maxLines={1} hasTabularNumbers>
-                    {formatRs(t.amount)} · {txnTitle(t, l)}
-                  </Text>
-                </StackItem>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() =>
-                    void enqueue("resolveDisputed", { txn_id: t.id, action: "keep_provisional" })
-                  }
-                >
-                  Keep
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => void deleteUnverified(t, ds)}>
-                  Remove
-                </Button>
-              </HStack>
+              <VStack key={t.id} gap={1} data-testid="disputed-row">
+                <Text maxLines={1} hasTabularNumbers>
+                  {formatRs(t.amount)} · {txnTitle(t, l)} · {dayLabel(t.occurred_at.slice(0, 10))}
+                </Text>
+                <HStack gap={2} vAlign="center" wrap="wrap">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() =>
+                      void enqueue("resolveDisputed", { txn_id: t.id, action: "keep_provisional" })
+                    }
+                  >
+                    Keep
+                  </Button>
+                  {ds.accounts
+                    .filter((a) => a.id !== t.account_id)
+                    .map((a) => (
+                      <Button
+                        key={a.id}
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          void enqueue("editProvisional", {
+                            txn_id: t.id,
+                            amount: t.amount,
+                            occurred_at: t.occurred_at,
+                            account_id: a.id,
+                          })
+                        }
+                      >
+                        {`Was ${a.name}`}
+                      </Button>
+                    ))}
+                  <ConfirmButton
+                    size="sm"
+                    width={null}
+                    label="Remove"
+                    confirm="Tap again"
+                    onConfirm={() => void deleteUnverified(t, ds)}
+                  />
+                </HStack>
+              </VStack>
             ))}
           </VStack>
         </Banner>

@@ -67,6 +67,11 @@ The goal is an app that feels calm, specific and fast: you open it, see where yo
 
 ## Feedback and state
 
+- **Confirm what can't be seen changing.** Deletes, merges, sign-outs and updates that move figures (opening
+  balance, paid off, bought it) use `ConfirmButton`: the first tap swaps the label for exactly what will happen
+  ("Tap again: delete Rs 1,500 · Lunch"), the second within 4 s does it. Save buttons name the change
+  ("Save · move to SadaPay · Rs 1,500", "Save · stop tracking Spotify").
+
 - **Loading:**
   - use skeletons shaped like the real content;
   - never show a blank screen or a layout jump;
