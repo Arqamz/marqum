@@ -148,6 +148,9 @@ statements/   your real statements, local only, gitignored
 - **Nothing is lost by deleting.** Deleting an unverified row offers Undo, and Activity › Deleted (or the
   statement's own sheet under Statements) restores it. A deleted row that later shows up on a statement says so
   instead of offering a duplicate.
+- **Fixing unverified rows:** amount, time and wallet of a notification or manual row can be changed
+  (`editProvisional`); a disputed row can be moved to the other wallet. Quick-add takes a time, so a purchase
+  entered late still matches its statement row.
 - **Re-import:** the phone's inbox scan skips files it has seen; a file you pick or share yourself is always
   imported again, and the toast says what changed ("1 new · 2 verified · 3 not posted yet").
 - While any provisional rows exist, the UI shows a banner such as "3 unverified · Rs 2,450 since 7 Nov — generate statements".

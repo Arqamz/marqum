@@ -1,7 +1,7 @@
 import { HStack } from "@astryxdesign/core/HStack";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
-import { classify, type Dataset, formatRs, karachiNow, parseRs } from "@marqum/core";
+import { classify, type Dataset, dayLabel, formatRs, karachiNow, parseRs, trackingStart } from "@marqum/core";
 import type { AccountId } from "@marqum/schema";
 import { useEffect, useMemo, useState } from "react";
 import { enqueue, newId } from "../lib/commands.ts";
@@ -10,7 +10,7 @@ import { CategoryPicker } from "./category-picker.tsx";
 import { useDataset } from "./dataset-provider.tsx";
 import { Button } from "./ui/button.tsx";
 import { Segmented } from "./ui/controls.tsx";
-import { MoneyInput } from "./ui/input.tsx";
+import { Field, Input, MoneyInput } from "./ui/input.tsx";
 import { Sheet } from "./ui/sheet.tsx";
 
 export interface QuickAddPreset {
@@ -39,6 +39,9 @@ function QuickAddForm({ ds, preset, onDone }: { ds: Dataset; preset: QuickAddPre
   const [reason, setReason] = useState(preset.reason ?? "");
   const [category, setCategory] = useState<string | null>(null);
   const [picked, setPicked] = useState(false);
+  // when it happened: now by default; an earlier time keeps it matching the right statement row
+  const [at, setAt] = useState(karachiNow());
+  const validAt = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(at) && at >= `${trackingStart(ds)}T00:00`;
   const paisa = parseRs(amount);
   const signed = paisa === null ? 0 : direction === "out" ? -Math.abs(paisa) : Math.abs(paisa);
   const suggestion = useMemo(
@@ -62,11 +65,11 @@ function QuickAddForm({ ds, preset, onDone }: { ds: Dataset; preset: QuickAddPre
       gap={6}
       onSubmit={(e) => {
         e.preventDefault();
-        if (!signed) return;
+        if (!signed || !validAt) return;
         void enqueue("addProvisional", {
           txn_id: newId(),
           account_id: account,
-          occurred_at: karachiNow(),
+          occurred_at: at,
           amount: signed,
           reason: reason.trim() || null,
           category_id: direction === "out" ? category : null,
@@ -101,6 +104,15 @@ function QuickAddForm({ ds, preset, onDone }: { ds: Dataset; preset: QuickAddPre
           />
         </HStack>
       </VStack>
+      <Field label="When">
+        <Input
+          type="datetime-local"
+          value={at}
+          min={`${trackingStart(ds)}T00:00`}
+          max={karachiNow()}
+          onChange={(e) => setAt(e.target.value)}
+        />
+      </Field>
       <TextInput label="Reason" value={reason} onChange={setReason} placeholder="Petrol, lunch with Ali…" />
       {direction === "out" ? (
         <CategoryPicker
@@ -113,8 +125,10 @@ function QuickAddForm({ ds, preset, onDone }: { ds: Dataset; preset: QuickAddPre
           }}
         />
       ) : null}
-      <Button type="submit" variant="primary" size="lg" disabled={!signed}>
-        {signed ? `Add ${formatRs(Math.abs(signed))}` : "Add transaction"}
+      <Button type="submit" variant="primary" size="lg" disabled={!signed || !validAt}>
+        {signed
+          ? `Add ${formatRs(Math.abs(signed))} ${direction === "out" ? "spent" : "received"} · ${ds.accounts.find((a) => a.id === account)?.name ?? ""}${at.slice(0, 10) === karachiNow().slice(0, 10) ? "" : ` · ${dayLabel(at.slice(0, 10))}`}`
+          : "Add transaction"}
       </Button>
     </VStack>
   );

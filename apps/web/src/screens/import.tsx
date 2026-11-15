@@ -19,6 +19,7 @@ import { Money } from "../components/money.tsx";
 import { Headline, Screen } from "../components/shell.tsx";
 import { TagSheet } from "../components/tag-sheet.tsx";
 import { Button } from "../components/ui/button.tsx";
+import { ConfirmButton } from "../components/ui/confirm-button.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
 import { db } from "../lib/db.ts";
 import { discardIntake, importAnyway, ingestFile, statementLabel, unlockIntake } from "../lib/intake.ts";
@@ -137,9 +138,13 @@ export function ImportScreen() {
                           Import anyway
                         </Button>
                       )}
-                      <Button variant="ghost" size="sm" onClick={() => void discardIntake(w.sha256)}>
-                        Discard
-                      </Button>
+                      <ConfirmButton
+                        size="sm"
+                        width={null}
+                        label="Discard"
+                        confirm="Tap again: skip this file"
+                        onConfirm={() => void discardIntake(w.sha256)}
+                      />
                     </HStack>
                   </VStack>
                 </Banner>

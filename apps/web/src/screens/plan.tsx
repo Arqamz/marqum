@@ -33,7 +33,7 @@ import {
 } from "@marqum/core";
 import type { AccountId, Category, Goal, Loan, Recurring } from "@marqum/schema";
 import { ChevronRight, Plus, X } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 import { CategoryIcon } from "../components/category-icon.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { Money } from "../components/money.tsx";
@@ -41,6 +41,7 @@ import { RecurringForm } from "../components/recurring-form.tsx";
 import { Screen } from "../components/shell.tsx";
 import { TagSheet } from "../components/tag-sheet.tsx";
 import { Button } from "../components/ui/button.tsx";
+import { ConfirmButton } from "../components/ui/confirm-button.tsx";
 import { Skeleton } from "../components/ui/controls.tsx";
 import { Field, Input, MoneyInput } from "../components/ui/input.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
@@ -620,33 +621,6 @@ function PlanSheets({
   );
 }
 
-/** A destructive action that needs a second tap within a few seconds. */
-function ConfirmButton({
-  label,
-  confirm,
-  onConfirm,
-}: {
-  label: string;
-  confirm: string;
-  onConfirm: () => void;
-}) {
-  const [armed, setArmed] = useState(false);
-  useEffect(() => {
-    if (!armed) return;
-    const t = setTimeout(() => setArmed(false), 4000);
-    return () => clearTimeout(t);
-  }, [armed]);
-  return (
-    <Button
-      variant={armed ? "danger" : "ghost"}
-      width="full"
-      onClick={() => (armed ? onConfirm() : setArmed(true))}
-    >
-      {armed ? confirm : label}
-    </Button>
-  );
-}
-
 /** Repayments of a loan: transactions tagged "Loan payment" to it, newest first. */
 const loanPayments = (ds: Dataset, loan: Loan) =>
   ds.transactions
@@ -762,13 +736,20 @@ function LoanDetail({
             Not paid off yet
           </Button>
         ) : (
-          <Button variant="secondary" width="full" onClick={() => save({ closed_on: today })}>
-            Mark paid off
-          </Button>
+          <ConfirmButton
+            variant="secondary"
+            label="Mark paid off"
+            confirm={
+              open
+                ? `Tap again: clear it, ${formatRs(st.outstanding)} stops counting as debt`
+                : "Tap again: mark paid off"
+            }
+            onConfirm={() => save({ closed_on: today })}
+          />
         )}
         <ConfirmButton
           label="Delete loan"
-          confirm="Tap again to delete"
+          confirm={`Tap again: delete ${loan.lender} · ${loan.purpose}`}
           onConfirm={() => {
             void enqueue("deleteLoan", { loan_id: loan.id });
             onDone();
@@ -1003,10 +984,15 @@ function GoalDetail({
             Not bought yet
           </Button>
         ) : (
-          <Button
+          <ConfirmButton
             variant="secondary"
-            width="full"
-            onClick={() => {
+            label={st.saved > 0 ? `Bought it · spend the ${formatRs(st.saved)}` : "Bought it"}
+            confirm={
+              st.saved > 0
+                ? `Tap again: ${formatRs(st.saved)} leaves the envelope, goal done`
+                : "Tap again: mark it done"
+            }
+            onConfirm={() => {
               void (async () => {
                 if (st.saved > 0)
                   await enqueue("moveGoal", {
@@ -1019,16 +1005,14 @@ function GoalDetail({
                 await save(today);
               })();
             }}
-          >
-            {st.saved > 0 ? `Bought it · spend the ${formatRs(st.saved)}` : "Bought it"}
-          </Button>
+          />
         )}
         <Button variant="secondary" width="full" onClick={() => onEdit({ kind: "goalEdit", goal })}>
           Edit details
         </Button>
         <ConfirmButton
           label="Delete goal"
-          confirm="Tap again to delete"
+          confirm={`Tap again: delete ${goal.name}${st.saved > 0 ? `, free ${formatRs(st.saved)}` : ""}`}
           onConfirm={() => {
             void enqueue("deleteGoal", { goal_id: goal.id });
             onDone();

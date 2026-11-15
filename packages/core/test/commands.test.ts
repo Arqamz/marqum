@@ -265,14 +265,16 @@ describe("closed months", () => {
   it("closeMonth refuses an already-closed month", () => {
     expect(execute(ds, cmd("closeMonth", { month: "2026-10" }), ctx()).error).toBe("invalid");
   });
-  it("mergeCounterparties may repoint closed-month rows (identity only)", () => {
+  it("mergeCounterparties repoints closed-month rows only with a fingerprint", () => {
     const a = cp("Danish");
     const b = cp("Danish A", { aliases: ["DANISH A"] });
     const d2 = closeMonthRecord(
       withRows(seeded(), { counterparties: [a, b], transactions: [{ ...oct, counterparty_id: b.id }] }),
       "2026-10",
     );
-    expect(execute(d2, cmd("mergeCounterparties", { into_id: a.id, from_ids: [b.id] }), ctx()).ok).toBe(true);
+    const merge = cmd("mergeCounterparties", { into_id: a.id, from_ids: [b.id] });
+    expect(execute(d2, merge, ctx()).error).toBe("step_up_required");
+    expect(execute(d2, merge, ctx(undefined, true)).ok).toBe(true);
   });
 });
 

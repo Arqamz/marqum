@@ -19,6 +19,7 @@ import { Headline, Screen, Section } from "../components/shell.tsx";
 import { TagSheet } from "../components/tag-sheet.tsx";
 import { TxnList } from "../components/txn-list.tsx";
 import { Button } from "../components/ui/button.tsx";
+import { ConfirmButton } from "../components/ui/confirm-button.tsx";
 import { Segmented, Skeleton } from "../components/ui/controls.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
 import { enqueue } from "../lib/commands.ts";
@@ -180,8 +181,26 @@ function EditCounterparty({
   const [merge, setMerge] = useState<string[]>([]);
   const [q, setQ] = useState("");
   const others = ds.counterparties
-    .filter((c) => c.id !== cp.id && (!q || c.name.toLowerCase().includes(q.toLowerCase())))
-    .slice(0, 8);
+    // ticked ones stay listed whatever the search, so you always see what will be merged
+    .filter(
+      (c) => c.id !== cp.id && (merge.includes(c.id) || !q || c.name.toLowerCase().includes(q.toLowerCase())),
+    )
+    .slice(0, 8 + merge.length);
+  const mergeNames = merge
+    .map((id) => ds.counterparties.find((c) => c.id === id)?.name ?? "")
+    .filter(Boolean);
+  const save = () => {
+    void enqueue("upsertCounterparty", {
+      counterparty_id: cp.id,
+      name: name.trim() || cp.name,
+      kind,
+      aliases: cp.aliases,
+      default_category_id: category,
+      default_flow: cp.default_flow,
+    });
+    if (merge.length > 0) void enqueue("mergeCounterparties", { into_id: cp.id, from_ids: merge });
+    onOpenChange(false);
+  };
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title={`Edit ${cp.name}`}>
       <VStack
@@ -189,16 +208,7 @@ function EditCounterparty({
         gap={5}
         onSubmit={(e: FormEvent) => {
           e.preventDefault();
-          void enqueue("upsertCounterparty", {
-            counterparty_id: cp.id,
-            name: name.trim() || cp.name,
-            kind,
-            aliases: cp.aliases,
-            default_category_id: category,
-            default_flow: cp.default_flow,
-          });
-          if (merge.length > 0) void enqueue("mergeCounterparties", { into_id: cp.id, from_ids: merge });
-          onOpenChange(false);
+          save();
         }}
       >
         <TextInput label="Name" value={name} onChange={setName} />
@@ -234,9 +244,24 @@ function EditCounterparty({
             </CheckboxList>
           ) : null}
         </VStack>
-        <Button type="submit" variant="primary" size="lg">
-          {merge.length > 0 ? `Save and merge ${merge.length}` : "Save"}
-        </Button>
+        {merge.length > 0 ? (
+          <VStack gap={2}>
+            <Text type="supporting">
+              {`${mergeNames.join(", ")} will become ${name.trim() || cp.name}: their transactions and rules move over. This can't be undone.`}
+            </Text>
+            <ConfirmButton
+              variant="primary"
+              size="lg"
+              label={`Save and merge ${merge.length}`}
+              confirm={`Tap again: merge ${mergeNames.join(", ")} into ${name.trim() || cp.name}`}
+              onConfirm={save}
+            />
+          </VStack>
+        ) : (
+          <Button type="submit" variant="primary" size="lg">
+            {`Save ${name.trim() || cp.name}`}
+          </Button>
+        )}
       </VStack>
     </Sheet>
   );

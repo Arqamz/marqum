@@ -61,6 +61,14 @@ export const Command = z.discriminatedUnion("name", [
   ),
   cmd("deleteProvisional", z.object({ txn_id: Id })),
   /**
+   * Fix an unverified row's amount, time or wallet (a typo, a purchase entered late, or "it was the other
+   * wallet"). It becomes provisional again so the next statement can verify it.
+   */
+  cmd(
+    "editProvisional",
+    z.object({ txn_id: Id, amount: Paisa, occurred_at: LocalDateTime, account_id: AccountId }),
+  ),
+  /**
    * Bring back an unverified row you deleted. The client sends the row as it was (its replica keeps deleted rows);
    * it comes back as provisional, so the next statement can verify it.
    */
@@ -104,6 +112,8 @@ export const Command = z.discriminatedUnion("name", [
     "recordBalance",
     z.object({ entry_id: Id, account_id: AccountId, balance: Paisa, as_of: LocalDateTime }),
   ),
+  /** Remove a balance you typed (a typo). Statement and notification balances can't be removed. */
+  cmd("deleteBalance", z.object({ entry_id: Id })),
   cmd(
     "upsertCategory",
     z.object({
@@ -214,6 +224,10 @@ export type CommandName = Command["name"];
 export type CommandArgs<N extends CommandName> = Extract<Command, { name: N }>["args"];
 
 /** Commands allowed on a closed month (with step-up auth). Everything else is rejected. */
-export const STEP_UP_ALLOWED: readonly CommandName[] = ["tagTransaction", "reopenMonth"];
+export const STEP_UP_ALLOWED: readonly CommandName[] = [
+  "tagTransaction",
+  "reopenMonth",
+  "mergeCounterparties",
+];
 /** Commands that always require step-up, regardless of month. */
 export const STEP_UP_REQUIRED: readonly CommandName[] = ["resetLedger", "reopenMonth"];
