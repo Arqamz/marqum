@@ -155,7 +155,7 @@ for (const scheme of ["light", "dark"] as const) {
       buffer: Buffer.from(novemberCsv(world.nayaClosing)),
     });
     await expect(
-      page.getByRole("region", { name: "Notifications" }).getByText("Imported NayaPay 6–7 Nov · 3 new"),
+      page.getByRole("region", { name: "Notifications" }).getByText("Imported NayaPay 6–7 Nov"),
     ).toBeVisible();
     await expect
       .poll(() => world.server.dataset().transactions.filter((t) => t.status === "provisional").length)

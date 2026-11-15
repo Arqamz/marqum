@@ -43,14 +43,7 @@ export interface PullPage {
 }
 
 /** Tables wiped by resetLedger (configuration tables are kept). */
-export const LEDGER_TABLES = [
-  "transactions",
-  "statements",
-  "balances",
-  "months",
-  "notifications",
-  "goal_moves",
-] as const;
+export const LEDGER_TABLES = ["transactions", "statements", "balances", "months", "notifications"] as const;
 
 const newEpoch = () => {
   const b = crypto.getRandomValues(new Uint8Array(12));

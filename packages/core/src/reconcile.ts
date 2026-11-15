@@ -3,6 +3,16 @@ import { minutesBetween } from "./time.ts";
 
 /** Matching window either side of the statement row's time. */
 export const MATCH_WINDOW_MINUTES = 36 * 60;
+/**
+ * Card payments post to the statement after the notification: a statement row may be up to this much *later*
+ * than the provisional row it verifies (never more than MATCH_WINDOW_MINUTES earlier).
+ */
+export const POSTING_LAG_MINUTES = 4 * 24 * 60;
+/**
+ * Days before a statement's last day in which a missing provisional row is still "not posted yet" rather than
+ * disputed: card payments take a day or more to reach the statement.
+ */
+export const SETTLE_DAYS = 3;
 /** Second pass: the statement may charge up to 40% more than notified (foreign-card tax/fees added later). */
 export const MAX_CORRECTION = 1.4;
 /** Second pass: share of merchant words that must agree. */
@@ -75,8 +85,9 @@ const provisionalText = (t: Transaction, names: Record<string, string>) =>
 
 /**
  * Pair statement rows with provisional/disputed transactions, one-to-one, best match first.
- * 1. Exact: same wallet, same amount, |Δt| ≤ 36h (smallest |Δt|, then most shared words, then ids).
- * 2. Tolerant, for what's left: same wallet, both outflows, |Δt| ≤ 36h, merchant-word overlap ≥ 0.5 and
+ * Window: the statement row from 36h before the provisional row to 4 days after it (card payments post late).
+ * 1. Exact: same wallet, same amount, in the window (smallest |Δt|, then most shared words, then ids).
+ * 2. Tolerant, for what's left: same wallet, both outflows, in the window, merchant-word overlap ≥ 0.5 and
  *    |statement| within [|provisional|, |provisional| × 1.40] — notifications can omit tax/fees the bank adds.
  *    These pairs carry `corrected: true`.
  * `counterpartyNames` (id → name) adds the provisional row's counterparty name to its words.
@@ -119,8 +130,10 @@ export function matchProvisional(
       const rw = merchantTokens(r.description ?? "");
       for (const t of open) {
         if (usedTxns.has(t.id) || t.account_id !== r.account_id) continue;
-        const dt = Math.abs(minutesBetween(r.occurred_at, t.occurred_at));
-        if (dt > MATCH_WINDOW_MINUTES) continue;
+        const lag = minutesBetween(t.occurred_at, r.occurred_at);
+        if (lag < -MATCH_WINDOW_MINUTES || lag > Math.max(MATCH_WINDOW_MINUTES, POSTING_LAG_MINUTES))
+          continue;
+        const dt = Math.abs(lag);
         const sim = tokenOverlap(rw, merchantTokens(provisionalText(t, counterpartyNames)));
         if (exact) {
           if (t.amount !== r.amount) continue;

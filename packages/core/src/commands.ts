@@ -33,7 +33,7 @@ import {
 } from "./dataset.ts";
 import { balanceAt, goalSaved } from "./ledger.ts";
 import { formatRs } from "./money.ts";
-import { matchProvisional } from "./reconcile.ts";
+import { matchProvisional, SETTLE_DAYS } from "./reconcile.ts";
 import {
   addDays,
   addMonths,
@@ -293,6 +293,7 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
   let removed = 0;
   let matched = 0;
   let disputed = 0;
+  let waiting = 0;
   const fresh: typeof st.rows = [];
 
   for (const r of tracked) {
@@ -462,9 +463,16 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
     removed++;
     mutations.push(tombstone("transactions", t, { updated_at: now }));
   }
+  // Not on the statement: disputed, unless it's from the statement's last few days (card payments post late) —
+  // those stay provisional and wait for the next statement.
+  const settling = `${addDays(st.to, -SETTLE_DAYS)}T23:59`;
   for (const t of provisional) {
     if (matchedIds.has(t.id) || t.status !== "provisional") continue;
     if (t.occurred_at < rangeFrom || t.occurred_at > toDT) continue;
+    if (t.occurred_at > settling) {
+      waiting++;
+      continue;
+    }
     disputed++;
     mutations.push(mut("transactions", { ...t, status: "disputed", updated_at: now }));
   }
@@ -526,6 +534,7 @@ function importStatement(ds: Dataset, a: CommandArgs<"importStatement">, ctx: Ex
     removed,
     matched,
     disputed,
+    waiting,
     ignored,
     corrected,
     fees,
@@ -600,6 +609,32 @@ function deleteProvisional(ds: Dataset, a: CommandArgs<"deleteProvisional">, ctx
   if (t.status === "verified")
     return fail("invalid", "verified transactions come from statements and can't be deleted");
   return ok([tombstone("transactions", t, { updated_at: ctx.now })]);
+}
+
+function restoreTransaction(ds: Dataset, a: CommandArgs<"restoreTransaction">, ctx: ExecContext): Outcome {
+  const r = a.row;
+  if (findTxn(ds, r.id)) return fail("conflict", "that transaction is already there");
+  if (r.amount === 0) return fail("invalid", "amount must not be zero");
+  if (r.occurred_at < `${trackingStart(ds)}T00:00`) return fail("invalid", beforeStart(ds));
+  const row: Transaction = {
+    ...r,
+    status: "provisional",
+    bank_type: null,
+    external_id: null,
+    statement_id: null,
+    // links to things that are gone are dropped
+    category_id: categoryExists(ds, r.category_id) ? r.category_id : null,
+    counterparty_id: ds.counterparties.some((c) => c.id === r.counterparty_id && !c.deleted)
+      ? r.counterparty_id
+      : null,
+    loan_id: ds.loans.some((l) => l.id === r.loan_id && !l.deleted) ? r.loan_id : null,
+    linked_txn_id: r.linked_txn_id && findTxn(ds, r.linked_txn_id) ? r.linked_txn_id : null,
+    fee: 0,
+    balance_after: null,
+    updated_at: ctx.now,
+    ...SYNC,
+  };
+  return ok([mut("transactions", row)]);
 }
 
 function resolveDisputed(ds: Dataset, a: CommandArgs<"resolveDisputed">, ctx: ExecContext): Outcome {
@@ -823,6 +858,10 @@ function upsertLoan(_ds: Dataset, a: CommandArgs<"upsertLoan">): Outcome {
   ]);
 }
 
+function deleteLoan(ds: Dataset, a: CommandArgs<"deleteLoan">): Outcome {
+  return deleteById("loans", ds.loans, a.loan_id, "loan");
+}
+
 function upsertGoal(_ds: Dataset, a: CommandArgs<"upsertGoal">): Outcome {
   if (a.target <= 0 || a.monthly < 0)
     return fail("invalid", "target must be positive and monthly not negative");
@@ -864,6 +903,14 @@ function moveGoal(ds: Dataset, a: CommandArgs<"moveGoal">): Outcome {
     ...SYNC,
   };
   return ok([mut("goal_moves", row)]);
+}
+
+function deleteGoalMove(ds: Dataset, a: CommandArgs<"deleteGoalMove">): Outcome {
+  const m = ds.goal_moves.find((x) => x.id === a.move_id && !x.deleted);
+  if (!m) return fail("not_found", `goal move ${a.move_id} not found`);
+  if (goalSaved(ds, m.goal_id) - m.amount < 0)
+    return fail("invalid", "money already taken out of this goal depends on it");
+  return ok([tombstone("goal_moves", m)]);
 }
 
 function setSettingCmd(_ds: Dataset, a: CommandArgs<"setSetting">): Outcome {
@@ -936,14 +983,7 @@ function reopenMonth(ds: Dataset, a: CommandArgs<"reopenMonth">, ctx: ExecContex
   return ok(mutations);
 }
 
-const LEDGER_TABLES = [
-  "transactions",
-  "statements",
-  "balances",
-  "months",
-  "notifications",
-  "goal_moves",
-] as const;
+const LEDGER_TABLES = ["transactions", "statements", "balances", "months", "notifications"] as const;
 
 function resetLedger(ds: Dataset, a: CommandArgs<"resetLedger">, ctx: ExecContext): Outcome {
   if (!/^\d{4}-\d{2}-01$/.test(a.tracking_start))
@@ -1023,6 +1063,10 @@ function run(ds: Dataset, c: Command, ctx: ExecContext): Outcome {
       return deleteProvisional(ds, c.args, ctx);
     case "tagTransaction":
       return tagTransaction(ds, c.args, ctx);
+    case "restoreTransaction":
+      return restoreTransaction(ds, c.args, ctx);
+    case "deleteLoan":
+      return deleteLoan(ds, c.args);
     case "resolveDisputed":
       return resolveDisputed(ds, c.args, ctx);
     case "recordBalance":
@@ -1049,6 +1093,8 @@ function run(ds: Dataset, c: Command, ctx: ExecContext): Outcome {
       return deleteGoal(ds, c.args);
     case "moveGoal":
       return moveGoal(ds, c.args);
+    case "deleteGoalMove":
+      return deleteGoalMove(ds, c.args);
     case "setSetting":
       return setSettingCmd(ds, c.args);
     case "closeMonth":

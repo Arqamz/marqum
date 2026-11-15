@@ -126,6 +126,8 @@ async function push(): Promise<void> {
           : await stepUp(`${describeCommand(needStepUp[0]?.command)} is in a closed month`).catch(() => null);
       if (!ok) {
         await db.outbox.bulkDelete(needStepUp.map((e) => e.seq).filter((s): s is number => s !== undefined));
+        for (const e of needStepUp)
+          if (e.command.name === "importStatement") await db.intake.delete(e.command.args.file_sha256);
         toast({
           tone: "error",
           title: "Not saved — that month is closed",
@@ -137,6 +139,7 @@ async function push(): Promise<void> {
 }
 
 function failed(command: Command, message: string): void {
+  if (command.name === "importStatement") void db.intake.delete(command.args.file_sha256);
   toast({ tone: "error", title: `${describeCommand(command)} didn't save`, detail: message });
 }
 
