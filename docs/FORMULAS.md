@@ -442,6 +442,12 @@ Examples (an existing Rs 90,000 loan at Rs 9,000/month):
 **Waterfall:** income → −C → −V → −G → surplus → −(monthly plan or installment) → left. For the P = 90,000 loan
 that's 85,000 → −16,000 → −40,000 → −10,000 → 19,000 → −9,000 → **10,000 left**.
 
+## Recurring suggestions
+
+"Looks recurring" lists repeated charges not yet tracked. **✕** dismisses one (setting `recurring_dismissed`,
+`<wallet>:<key>`); deleting a fixed charge also stops suggesting its counterparty (`cp:<id>`). "Suggest N dismissed
+again" clears the list.
+
 ## Goals
 
 A goal is an envelope inside SadaPay: **Add money** / **Take money out** are goal moves, listed on the goal with a

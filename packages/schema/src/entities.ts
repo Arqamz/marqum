@@ -267,6 +267,8 @@ export const SETTINGS = {
    * income changes over time, spending adjustment, known one-off future items, horizon.
    */
   forecast: "",
+  /** JSON array of "Looks recurring" suggestions you dismissed: "<wallet>:<key>" or "cp:<counterparty id>" */
+  recurring_dismissed: "",
 } as const;
 
 export const TABLES = {

@@ -46,6 +46,7 @@ import { Skeleton } from "../components/ui/controls.tsx";
 import { Field, Input, MoneyInput } from "../components/ui/input.tsx";
 import { Sheet } from "../components/ui/sheet.tsx";
 import { enqueue, newId } from "../lib/commands.ts";
+import { dismissedSuggestions, isDismissed, setDismissed, suggestionKey } from "../lib/dismissed.ts";
 import { opt } from "../lib/opt.ts";
 import {
   cadenceLabel,
@@ -123,8 +124,12 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
   );
   const candidates = useMemo(() => {
     const tracked = new Set(ds.recurring.map((r) => r.counterparty_id).filter(Boolean));
-    return detectRecurring(ds).filter((c) => !c.counterparty_id || !tracked.has(c.counterparty_id));
+    const dismissed = dismissedSuggestions(ds);
+    return detectRecurring(ds).filter(
+      (c) => (!c.counterparty_id || !tracked.has(c.counterparty_id)) && !isDismissed(dismissed, c),
+    );
   }, [ds]);
+  const dismissedCount = useMemo(() => dismissedSuggestions(ds).size, [ds]);
   const [edit, setEdit] = useState<Edit | null>(null);
   const [txnId, setTxnId] = useState<string | null>(null);
   const fixedTotal = fixed.reduce((sum, r) => sum + monthlyEquivalent(r), 0);
@@ -232,12 +237,38 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
                       >
                         Add
                       </Button>
+                      <IconButton
+                        label={`Not recurring: ${c.name}`}
+                        size="sm"
+                        variant="ghost"
+                        icon={<X aria-hidden />}
+                        onClick={() => {
+                          const key = suggestionKey(c);
+                          void setDismissed(ds, [key]);
+                          toast({
+                            tone: "neutral",
+                            title: `${c.name} won't be suggested again`,
+                            action: { label: "Undo", run: () => void setDismissed(ds, [], [key]) },
+                          });
+                        }}
+                      />
                     </HStack>
                   }
                 />
               ))}
             </List>
           </Card>
+        ) : null}
+        {dismissedCount > 0 ? (
+          <HStack>
+            <Button
+              variant="text"
+              size="sm"
+              onClick={() => void enqueue("setSetting", { key: "recurring_dismissed", value: "" })}
+            >
+              {`Suggest ${dismissedCount} dismissed again`}
+            </Button>
+          </HStack>
         ) : null}
       </Block>
 

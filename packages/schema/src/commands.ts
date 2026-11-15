@@ -128,6 +128,11 @@ export const Command = z.discriminatedUnion("name", [
       budget: Paisa.nullable().optional(),
     }),
   ),
+  /**
+   * Remove a category nothing uses (no transactions, subcategories, rules, fixed charges or counterparty
+   * defaults). A category in use is hidden instead.
+   */
+  cmd("deleteCategory", z.object({ category_id: Id })),
   cmd(
     "upsertRule",
     z.object({
