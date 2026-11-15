@@ -321,6 +321,52 @@ const notif = {
     t,
   );
   check(replica.notifications?.get(notif.id)?.status === "parsed", "notification row synced");
+
+  // Deleting it is recoverable: the replica keeps the deleted row, and restoreTransaction brings it back.
+  const del = await push([{ id: cmdId(), name: "deleteProvisional", at, args: { txn_id: t.id } }]);
+  check(del.json.results[0]?.ok === true, "delete the notification row", del.json);
+  await pullAll();
+  const gone = replica.transactions?.get(t.id);
+  check(
+    gone?.deleted === true && gone.amount === -125000,
+    "deleted row kept in the replica as a tombstone",
+    gone,
+  );
+  const g = gone as unknown as Record<string, unknown>;
+  const pick = (k: string) => g[k] as never;
+  const restore = await push([
+    {
+      id: cmdId(),
+      name: "restoreTransaction",
+      at,
+      args: {
+        row: {
+          id: t.id,
+          account_id: pick("account_id"),
+          occurred_at: pick("occurred_at"),
+          amount: pick("amount"),
+          flow: pick("flow"),
+          source: "notification",
+          description: pick("description"),
+          reason: pick("reason"),
+          category_id: pick("category_id"),
+          counterparty_id: pick("counterparty_id"),
+          loan_id: null,
+          linked_txn_id: null,
+          notification_id: pick("notification_id"),
+          created_at: pick("created_at"),
+        },
+      },
+    },
+  ]);
+  check(restore.json.results[0]?.ok === true, "restore the deleted row", restore.json);
+  await pullAll();
+  const back = replica.transactions?.get(t.id);
+  check(
+    back?.deleted === false && back.status === "provisional",
+    "restored row is live and provisional",
+    back,
+  );
 }
 {
   const { json } = await api("POST", "/api/ingest/notification", {

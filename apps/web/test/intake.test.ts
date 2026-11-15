@@ -16,11 +16,15 @@ describe("statement intake", () => {
     const file = { name: "m-11-2026.csv", bytes: enc(novemberCsv(20000)) };
     const first = await ingestFile(file);
     expect(first.kind).toBe("imported");
-    expect(toasts.get().at(-1)?.title).toBe("Imported NayaPay 6–7 Nov · 3 new");
+    expect(toasts.get().at(-1)).toMatchObject({ title: "Imported NayaPay 6–7 Nov", detail: "3 new" });
     const queued = await db.outbox.toArray();
     expect(queued.map((q) => q.command.name)).toEqual(["importStatement"]);
-    expect((await ingestFile(file)).kind).toBe("duplicate");
+    expect((await ingestFile(file, { interactive: false })).kind).toBe("duplicate");
     expect(await db.outbox.count()).toBe(1);
+    // picking the same file again re-imports it and says nothing changed
+    expect((await ingestFile(file)).kind).toBe("imported");
+    expect(toasts.get().at(-1)?.detail).toBe("No changes: already up to date");
+    expect(await db.outbox.count()).toBe(2);
   });
 
   it("parks a statement with a failed check under Needs a look", async () => {
@@ -42,7 +46,9 @@ describe("statement intake", () => {
     await ingestFile(file);
     const [entry] = await db.intake.toArray();
     await discardIntake(entry?.sha256 ?? "");
-    expect((await ingestFile(file)).kind).toBe("duplicate");
+    expect((await ingestFile(file, { interactive: false })).kind).toBe("duplicate");
+    // choosing it again yourself brings it back for a look
+    expect((await ingestFile(file)).kind).toBe("needs_look");
   });
 
   it("reports unreadable files", async () => {

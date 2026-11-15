@@ -5,6 +5,7 @@ import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
+import { IconButton } from "@astryxdesign/core/IconButton";
 import { List, ListItem } from "@astryxdesign/core/List";
 import { ProgressBar } from "@astryxdesign/core/ProgressBar";
 import { StackItem } from "@astryxdesign/core/Stack";
@@ -19,6 +20,7 @@ import {
   expectedCharges,
   formatRs,
   goalStatus,
+  isClosed,
   karachiNow,
   loanStatus,
   monthLabel,
@@ -30,13 +32,14 @@ import {
   suggestedSplit,
 } from "@marqum/core";
 import type { AccountId, Category, Goal, Loan, Recurring } from "@marqum/schema";
-import { ChevronRight, Plus } from "lucide-react";
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import { ChevronRight, Plus, X } from "lucide-react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { CategoryIcon } from "../components/category-icon.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { Money } from "../components/money.tsx";
 import { RecurringForm } from "../components/recurring-form.tsx";
 import { Screen } from "../components/shell.tsx";
+import { TagSheet } from "../components/tag-sheet.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Skeleton } from "../components/ui/controls.tsx";
 import { Field, Input, MoneyInput } from "../components/ui/input.tsx";
@@ -50,6 +53,8 @@ import {
   monthlyEquivalent,
   type RecurringKind,
 } from "../lib/recurring.ts";
+import { toast } from "../lib/toast.ts";
+import { lookup, txnTitle } from "../lib/view.ts";
 
 const STATUS = {
   paid: { label: "Paid", variant: "success" },
@@ -91,7 +96,10 @@ function Block({ title, aside, children }: { title: string; aside?: ReactNode; c
 type Edit =
   | { kind: "income" }
   | { kind: "loan"; loan?: Loan }
+  | { kind: "loanEdit"; loan: Loan }
+  | { kind: "loanPay"; loan: Loan }
   | { kind: "goal"; goal?: Goal }
+  | { kind: "goalEdit"; goal: Goal }
   | { kind: "move"; goal: Goal; dir: "in" | "out" }
   | { kind: "fixed"; recurring?: Recurring; candidate?: RecurringCandidate }
   | { kind: "budget"; category: Category; basis: Basis | null };
@@ -117,6 +125,7 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
     return detectRecurring(ds).filter((c) => !c.counterparty_id || !tracked.has(c.counterparty_id));
   }, [ds]);
   const [edit, setEdit] = useState<Edit | null>(null);
+  const [txnId, setTxnId] = useState<string | null>(null);
   const fixedTotal = fixed.reduce((sum, r) => sum + monthlyEquivalent(r), 0);
   const status = useMemo(
     () => new Map(expectedCharges(ds, monthOf(now), now).map((c) => [c.recurring.id, c])),
@@ -269,7 +278,9 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
                   />
                   <HStack justify="between" vAlign="center" gap={4}>
                     <StackItem size="fill">
-                      {done ? (
+                      {g.goal.achieved_on ? (
+                        <Badge label={`Bought ${dayLabel(g.goal.achieved_on)}`} variant="success" />
+                      ) : done ? (
                         <Badge label="Reached" variant="success" />
                       ) : (
                         <Text type="supporting" hasTabularNumbers>
@@ -278,14 +289,16 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
                         </Text>
                       )}
                     </StackItem>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon={<Plus aria-hidden />}
-                      onClick={() => setEdit({ kind: "move", goal: g.goal, dir: "in" })}
-                    >
-                      Add money
-                    </Button>
+                    {g.goal.achieved_on ? null : (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<Plus aria-hidden />}
+                        onClick={() => setEdit({ kind: "move", goal: g.goal, dir: "in" })}
+                      >
+                        Add money
+                      </Button>
+                    )}
                   </HStack>
                 </VStack>
               </Card>
@@ -395,7 +408,18 @@ function PlanContent({ ds, now }: { ds: Dataset; now: string }) {
         </Collapsible>
       </Card>
 
-      <PlanSheets ds={ds} now={now} edit={edit} onEdit={setEdit} onClose={() => setEdit(null)} />
+      <PlanSheets
+        ds={ds}
+        now={now}
+        edit={edit}
+        onEdit={setEdit}
+        onClose={() => setEdit(null)}
+        onOpenTxn={(id) => {
+          setEdit(null);
+          setTxnId(id);
+        }}
+      />
+      <TagSheet txn={ds.transactions.find((t) => t.id === txnId) ?? null} onClose={() => setTxnId(null)} />
     </>
   );
 }
@@ -506,39 +530,62 @@ function PlanSheets({
   edit,
   onEdit,
   onClose,
+  onOpenTxn,
 }: {
   ds: Dataset;
   now: string;
   edit: Edit | null;
   onEdit: (e: Edit) => void;
   onClose: () => void;
+  onOpenTxn: (id: string) => void;
 }) {
+  // the sheet shows the live row, so it reflects saves made from it
+  const loan =
+    edit && "loan" in edit && edit.loan ? (ds.loans.find((x) => x.id === edit.loan?.id) ?? null) : null;
+  const goal =
+    edit && "goal" in edit && edit.goal ? (ds.goals.find((x) => x.id === edit.goal?.id) ?? null) : null;
   const title =
     edit?.kind === "income"
       ? "Income from Arqam (Meezan)"
-      : edit?.kind === "loan"
-        ? edit.loan
-          ? `${edit.loan.lender} · ${edit.loan.purpose}`
+      : edit?.kind === "loan" || edit?.kind === "loanEdit"
+        ? loan
+          ? `${loan.lender} · ${loan.purpose}`
           : "New loan"
-        : edit?.kind === "goal"
-          ? (edit.goal?.name ?? "New goal")
-          : edit?.kind === "move"
-            ? `${edit.dir === "in" ? "Add money" : "Take money out"} · ${edit.goal.name}`
-            : edit?.kind === "fixed"
-              ? (edit.recurring?.name ?? "Add a subscription or bill")
-              : edit?.kind === "budget"
-                ? `${edit.category.name} budget`
-                : "";
+        : edit?.kind === "loanPay"
+          ? `Record a payment · ${edit.loan.lender}`
+          : edit?.kind === "goal" || edit?.kind === "goalEdit"
+            ? (goal?.name ?? "New goal")
+            : edit?.kind === "move"
+              ? `${edit.dir === "in" ? "Add money" : "Take money out"} · ${edit.goal.name}`
+              : edit?.kind === "fixed"
+                ? (edit.recurring?.name ?? "Add a subscription or bill")
+                : edit?.kind === "budget"
+                  ? `${edit.category.name} budget`
+                  : "";
   return (
     <Sheet open={edit !== null} onOpenChange={(o) => !o && onClose()} title={title} purpose="form">
       {edit?.kind === "income" ? <IncomeList ds={ds} now={now} /> : null}
-      {edit?.kind === "loan" ? <LoanForm loan={edit.loan} onDone={onClose} /> : null}
-      {edit?.kind === "goal" ? (
+      {edit?.kind === "loan" && loan ? (
+        <LoanDetail ds={ds} now={now} loan={loan} onEdit={onEdit} onDone={onClose} onOpenTxn={onOpenTxn} />
+      ) : null}
+      {(edit?.kind === "loan" && !edit.loan) || edit?.kind === "loanEdit" ? (
+        <LoanForm
+          ds={ds}
+          loan={loan ?? undefined}
+          onDone={() => (loan ? onEdit({ kind: "loan", loan }) : onClose())}
+        />
+      ) : null}
+      {edit?.kind === "loanPay" && loan ? (
+        <LoanPayForm ds={ds} loan={loan} onDone={() => onEdit({ kind: "loan", loan })} />
+      ) : null}
+      {edit?.kind === "goal" && goal ? (
+        <GoalDetail ds={ds} now={now} goal={goal} onEdit={onEdit} onDone={onClose} />
+      ) : null}
+      {(edit?.kind === "goal" && !edit.goal) || edit?.kind === "goalEdit" ? (
         <GoalForm
-          goal={edit.goal}
+          goal={goal ?? undefined}
           count={ds.goals.length}
-          onDone={onClose}
-          onTakeOut={(goal) => onEdit({ kind: "move", goal, dir: "out" })}
+          onDone={() => (goal ? onEdit({ kind: "goal", goal }) : onClose())}
         />
       ) : null}
       {edit?.kind === "move" ? (
@@ -570,6 +617,428 @@ function PlanSheets({
         <BudgetForm category={edit.category} basis={edit.basis} onDone={onClose} />
       ) : null}
     </Sheet>
+  );
+}
+
+/** A destructive action that needs a second tap within a few seconds. */
+function ConfirmButton({
+  label,
+  confirm,
+  onConfirm,
+}: {
+  label: string;
+  confirm: string;
+  onConfirm: () => void;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <Button
+      variant={armed ? "danger" : "ghost"}
+      width="full"
+      onClick={() => (armed ? onConfirm() : setArmed(true))}
+    >
+      {armed ? confirm : label}
+    </Button>
+  );
+}
+
+/** Repayments of a loan: transactions tagged "Loan payment" to it, newest first. */
+const loanPayments = (ds: Dataset, loan: Loan) =>
+  ds.transactions
+    .filter((t) => !t.deleted && t.loan_id === loan.id && t.flow === "loan_repay")
+    .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+
+function LoanDetail({
+  ds,
+  now,
+  loan,
+  onEdit,
+  onDone,
+  onOpenTxn,
+}: {
+  ds: Dataset;
+  now: string;
+  loan: Loan;
+  onEdit: (e: Edit) => void;
+  onDone: () => void;
+  onOpenTxn: (id: string) => void;
+}) {
+  const st = loanStatus(ds, now).find((x) => x.loan.id === loan.id);
+  const payments = loanPayments(ds, loan);
+  const l = lookup(ds);
+  if (!st) return null;
+  const open = st.outstanding > 0;
+  const today = karachiNow().slice(0, 10);
+  const save = (patch: Partial<Loan>) =>
+    void enqueue("upsertLoan", {
+      loan_id: loan.id,
+      lender: loan.lender,
+      counterparty_id: loan.counterparty_id,
+      principal: loan.principal,
+      started_on: loan.started_on,
+      purpose: loan.purpose,
+      installment: loan.installment,
+      note: loan.note,
+      manual_repaid: loan.manual_repaid,
+      closed_on: loan.closed_on,
+      ...patch,
+    });
+  return (
+    <VStack gap={5} data-testid="loan-detail">
+      <VStack gap={2}>
+        <Money
+          value={st.outstanding}
+          tone={open ? "neg" : "pos"}
+          className="font-display text-4xl font-medium"
+        />
+        <Text color="secondary" hasTabularNumbers>
+          {open
+            ? `left of ${formatRs(loan.principal)} · ${formatRs(loan.installment)}/mo${st.payoff_month ? ` · clear by ${monthLabel(st.payoff_month)}` : ""}`
+            : loan.closed_on
+              ? `Marked paid off ${dayLabel(loan.closed_on)}`
+              : `Repaid ${formatRs(st.repaid)} of ${formatRs(loan.principal)}`}
+        </Text>
+        <ProgressBar
+          label="Repaid"
+          isLabelHidden
+          value={st.progress * 100}
+          variant={open ? "accent" : "success"}
+        />
+      </VStack>
+
+      {open ? (
+        <Button variant="primary" size="lg" onClick={() => onEdit({ kind: "loanPay", loan })}>
+          Record a payment
+        </Button>
+      ) : null}
+
+      <VStack gap={2}>
+        <Text type="label">Payments</Text>
+        {payments.length === 0 && loan.manual_repaid === 0 ? (
+          <Text type="supporting">
+            None yet. Tag a transfer as “Loan payment” and pick this loan, or record one here.
+          </Text>
+        ) : (
+          <Card variant="muted" padding={0}>
+            <List hasDividers density="compact">
+              {payments.map((t) => (
+                <ListItem
+                  key={t.id}
+                  label={dayLabel(t.occurred_at.slice(0, 10))}
+                  description={`${l.account.get(t.account_id) ?? ""} · ${txnTitle(t, l)}${t.status === "verified" ? "" : " · unverified"}`}
+                  endContent={
+                    <HStack gap={1} vAlign="center">
+                      <Money value={Math.abs(t.amount)} />
+                      <ChevronRight size={16} aria-hidden />
+                    </HStack>
+                  }
+                  onClick={() => onOpenTxn(t.id)}
+                />
+              ))}
+              {loan.manual_repaid > 0 ? (
+                <ListItem
+                  label="Outside the wallets"
+                  description="Cash or another account"
+                  endContent={<Money value={loan.manual_repaid} />}
+                  onClick={() => onEdit({ kind: "loanEdit", loan })}
+                />
+              ) : null}
+            </List>
+          </Card>
+        )}
+      </VStack>
+
+      <VStack gap={2}>
+        <Button variant="secondary" width="full" onClick={() => onEdit({ kind: "loanEdit", loan })}>
+          Edit details
+        </Button>
+        {loan.closed_on ? (
+          <Button variant="secondary" width="full" onClick={() => save({ closed_on: null })}>
+            Not paid off yet
+          </Button>
+        ) : (
+          <Button variant="secondary" width="full" onClick={() => save({ closed_on: today })}>
+            Mark paid off
+          </Button>
+        )}
+        <ConfirmButton
+          label="Delete loan"
+          confirm="Tap again to delete"
+          onConfirm={() => {
+            void enqueue("deleteLoan", { loan_id: loan.id });
+            onDone();
+          }}
+        />
+        {payments.length > 0 ? (
+          <Text type="supporting">Deleting keeps its payments as loan payments, just unlinked.</Text>
+        ) : null}
+      </VStack>
+    </VStack>
+  );
+}
+
+/** The lender as a counterparty: the loan's own, else one whose name matches. */
+function lenderId(ds: Dataset, loan: Pick<Loan, "counterparty_id" | "lender">): string | null {
+  if (loan.counterparty_id) return loan.counterparty_id;
+  const name = loan.lender.trim().toLowerCase();
+  return ds.counterparties.find((c) => !c.deleted && c.name.toLowerCase() === name)?.id ?? null;
+}
+
+/** Pick the transfer that repaid the loan (to the lender first, then newest), or add a cash payment. */
+function LoanPayForm({ ds, loan, onDone }: { ds: Dataset; loan: Loan; onDone: () => void }) {
+  const [cash, setCash] = useState("");
+  const c = parseRs(cash);
+  const lender = lenderId(ds, loan);
+  const l = lookup(ds);
+  const options = ds.transactions
+    .filter(
+      (t) =>
+        !t.deleted &&
+        t.amount < 0 &&
+        t.occurred_at.slice(0, 10) >= loan.started_on &&
+        (t.flow === "spend" || (t.flow === "loan_repay" && t.loan_id === null)) &&
+        // repayments are transfers to people, not card spends at merchants
+        l.counterparty.get(t.counterparty_id ?? "")?.kind !== "merchant" &&
+        t.bank_type?.toLowerCase().includes("card") !== true &&
+        !isClosed(ds, monthOf(t.occurred_at)),
+    )
+    .sort(
+      (a, b) =>
+        Number(b.counterparty_id === lender && lender !== null) -
+          Number(a.counterparty_id === lender && lender !== null) ||
+        b.occurred_at.localeCompare(a.occurred_at),
+    )
+    .slice(0, 10);
+  const link = (txnId: string) => {
+    void enqueue("tagTransaction", {
+      txn_id: txnId,
+      flow: "loan_repay",
+      loan_id: loan.id,
+      category_id: null,
+    });
+    onDone();
+  };
+  return (
+    <VStack gap={5}>
+      <VStack gap={2}>
+        <Text type="label">Which transfer paid it?</Text>
+        {options.length === 0 ? (
+          <Text type="supporting">No outgoing transfers since {dayLabel(loan.started_on)}.</Text>
+        ) : (
+          <Card variant="muted" padding={0}>
+            <List hasDividers density="compact">
+              {options.map((t) => (
+                <ListItem
+                  key={t.id}
+                  label={txnTitle(t, l)}
+                  description={`${dayLabel(t.occurred_at.slice(0, 10))} · ${l.account.get(t.account_id) ?? ""}`}
+                  endContent={<Money value={Math.abs(t.amount)} />}
+                  onClick={() => link(t.id)}
+                />
+              ))}
+            </List>
+          </Card>
+        )}
+      </VStack>
+      <Form
+        onSubmit={() => {
+          if (!c) return;
+          void enqueue("upsertLoan", {
+            loan_id: loan.id,
+            lender: loan.lender,
+            counterparty_id: loan.counterparty_id,
+            principal: loan.principal,
+            started_on: loan.started_on,
+            purpose: loan.purpose,
+            installment: loan.installment,
+            note: loan.note,
+            manual_repaid: loan.manual_repaid + c,
+            closed_on: loan.closed_on,
+          });
+          onDone();
+        }}
+      >
+        <MoneyInput
+          label="Paid in cash or from another account"
+          value={cash}
+          onChange={setCash}
+          description="Not from SadaPay or NayaPay"
+        />
+        <Button type="submit" variant="secondary" disabled={!c}>
+          {c ? `Add ${formatRs(c)} paid outside` : "Add payment"}
+        </Button>
+      </Form>
+    </VStack>
+  );
+}
+
+function GoalDetail({
+  ds,
+  now,
+  goal,
+  onEdit,
+  onDone,
+}: {
+  ds: Dataset;
+  now: string;
+  goal: Goal;
+  onEdit: (e: Edit) => void;
+  onDone: () => void;
+}) {
+  const st = goalStatus(ds, now).find((x) => x.goal.id === goal.id);
+  const moves = ds.goal_moves
+    .filter((m) => !m.deleted && m.goal_id === goal.id)
+    .sort((a, b) => b.on.localeCompare(a.on) || b.id.localeCompare(a.id));
+  if (!st) return null;
+  const today = karachiNow().slice(0, 10);
+  const save = (achieved_on: string | null) =>
+    enqueue("upsertGoal", {
+      goal_id: goal.id,
+      name: goal.name,
+      icon: goal.icon,
+      target: goal.target,
+      monthly: goal.monthly,
+      priority: goal.priority,
+      achieved_on,
+    });
+  const removeMove = (m: (typeof moves)[number]) => {
+    void enqueue("deleteGoalMove", { move_id: m.id });
+    toast({
+      tone: "neutral",
+      title: `Removed ${formatRs(Math.abs(m.amount))} ${m.amount > 0 ? "added" : "taken out"}`,
+      action: {
+        label: "Undo",
+        run: () =>
+          void enqueue("moveGoal", {
+            move_id: m.id,
+            goal_id: m.goal_id,
+            amount: m.amount,
+            on: m.on,
+            note: m.note,
+          }),
+      },
+    });
+  };
+  // a withdrawal can't be undone below zero: only offer removing a move the envelope can lose
+  const canRemove = (m: (typeof moves)[number]) => st.saved - m.amount >= 0;
+  return (
+    <VStack gap={5} data-testid="goal-detail">
+      <VStack gap={2}>
+        <Money value={st.saved} className="font-display text-4xl font-medium" />
+        <Text color="secondary" hasTabularNumbers>
+          {goal.achieved_on
+            ? `of ${formatRs(goal.target)} · bought ${dayLabel(goal.achieved_on)}`
+            : `of ${formatRs(goal.target)} · ${formatRs(goal.monthly)}/month${st.eta_month ? ` · ready by ${monthLabel(st.eta_month)}` : ""}`}
+        </Text>
+        <ProgressBar
+          label="Saved"
+          isLabelHidden
+          value={st.progress * 100}
+          variant={st.progress >= 1 ? "success" : "accent"}
+        />
+      </VStack>
+
+      {goal.achieved_on ? null : (
+        <HStack gap={2}>
+          <StackItem size="fill">
+            <Button variant="primary" width="full" onClick={() => onEdit({ kind: "move", goal, dir: "in" })}>
+              Add money
+            </Button>
+          </StackItem>
+          {st.saved > 0 ? (
+            <StackItem size="fill">
+              <Button
+                variant="secondary"
+                width="full"
+                onClick={() => onEdit({ kind: "move", goal, dir: "out" })}
+              >
+                Take money out
+              </Button>
+            </StackItem>
+          ) : null}
+        </HStack>
+      )}
+
+      <VStack gap={2}>
+        <Text type="label">Set aside</Text>
+        {moves.length === 0 ? (
+          <Text type="supporting">Nothing yet. “Add money” sets SadaPay money aside for this goal.</Text>
+        ) : (
+          <Card variant="muted" padding={0}>
+            <List hasDividers density="compact">
+              {moves.map((m) => (
+                <ListItem
+                  key={m.id}
+                  label={dayLabel(m.on)}
+                  description={m.note ?? (m.amount > 0 ? "Added" : "Taken out")}
+                  endContent={
+                    <HStack gap={1} vAlign="center">
+                      <Money value={m.amount} {...(m.amount > 0 ? { tone: "pos" as const } : {})} />
+                      {canRemove(m) ? (
+                        <IconButton
+                          label="Remove"
+                          size="sm"
+                          variant="ghost"
+                          icon={<X aria-hidden />}
+                          onClick={() => removeMove(m)}
+                        />
+                      ) : null}
+                    </HStack>
+                  }
+                />
+              ))}
+            </List>
+          </Card>
+        )}
+      </VStack>
+
+      <VStack gap={2}>
+        {goal.achieved_on ? (
+          <Button variant="secondary" width="full" onClick={() => void save(null)}>
+            Not bought yet
+          </Button>
+        ) : (
+          <Button
+            variant="secondary"
+            width="full"
+            onClick={() => {
+              void (async () => {
+                if (st.saved > 0)
+                  await enqueue("moveGoal", {
+                    move_id: newId(),
+                    goal_id: goal.id,
+                    amount: -st.saved,
+                    on: today,
+                    note: `Spent on ${goal.name}`,
+                  });
+                await save(today);
+              })();
+            }}
+          >
+            {st.saved > 0 ? `Bought it · spend the ${formatRs(st.saved)}` : "Bought it"}
+          </Button>
+        )}
+        <Button variant="secondary" width="full" onClick={() => onEdit({ kind: "goalEdit", goal })}>
+          Edit details
+        </Button>
+        <ConfirmButton
+          label="Delete goal"
+          confirm="Tap again to delete"
+          onConfirm={() => {
+            void enqueue("deleteGoal", { goal_id: goal.id });
+            onDone();
+          }}
+        />
+        {st.saved > 0 ? (
+          <Text type="supporting">Deleting frees the {formatRs(st.saved)} set aside back into SadaPay.</Text>
+        ) : null}
+      </VStack>
+    </VStack>
   );
 }
 
@@ -637,29 +1106,37 @@ function BudgetForm({
 
 const rs = (paisa: number | undefined): string => (paisa ? String(paisa / 100) : "");
 
-function LoanForm({ loan, onDone }: { loan: Loan | undefined; onDone: () => void }) {
+function LoanForm({ ds, loan, onDone }: { ds: Dataset; loan: Loan | undefined; onDone: () => void }) {
   const [lender, setLender] = useState(loan?.lender ?? "Mom");
   const [purpose, setPurpose] = useState(loan?.purpose ?? "");
   const [principal, setPrincipal] = useState(rs(loan?.principal));
   const [installment, setInstallment] = useState(rs(loan?.installment));
+  const [outside, setOutside] = useState(rs(loan?.manual_repaid));
   const [started, setStarted] = useState(loan?.started_on ?? karachiNow().slice(0, 10));
   const p = parseRs(principal);
   const i = parseRs(installment);
-  const ok = lender.trim() && purpose.trim() && p && i;
+  const m = outside.trim() === "" ? 0 : parseRs(outside);
+  const ok = lender.trim() && purpose.trim() && p && i && m !== null;
   return (
     <Form
       onSubmit={() => {
-        if (!ok || !p || !i) return;
+        if (!ok || !p || !i || m === null) return;
+        // a lender you also send money to (a counterparty with that name) lets payments to them be found first
+        const name = lender.trim();
+        const cp =
+          loan && loan.lender === name
+            ? loan.counterparty_id
+            : lenderId(ds, { counterparty_id: null, lender: name });
         void enqueue("upsertLoan", {
           loan_id: loan?.id ?? newId(),
-          lender: lender.trim(),
-          counterparty_id: loan?.counterparty_id ?? null,
+          lender: name,
+          counterparty_id: cp ?? null,
           principal: p,
           started_on: started,
           purpose: purpose.trim(),
           installment: i,
           note: loan?.note ?? null,
-          manual_repaid: loan?.manual_repaid ?? 0,
+          manual_repaid: m,
           closed_on: loan?.closed_on ?? null,
         });
         onDone();
@@ -683,24 +1160,27 @@ function LoanForm({ loan, onDone }: { loan: Loan | undefined; onDone: () => void
       <Field label="Started">
         <Input type="date" value={started} onChange={(e) => setStarted(e.target.value)} />
       </Field>
+      {loan ? (
+        <MoneyInput
+          label="Repaid outside the wallets"
+          value={outside}
+          onChange={setOutside}
+          description="Cash or another account. Wallet payments count on their own."
+        />
+      ) : null}
       <Button type="submit" variant="primary" size="lg" disabled={!ok}>
         {loan ? "Save loan" : "Add loan"}
       </Button>
+      {loan ? null : (
+        <Text type="supporting">
+          Repayments: tag each transfer as “Loan payment” and pick this loan, or open the loan and record one.
+        </Text>
+      )}
     </Form>
   );
 }
 
-function GoalForm({
-  goal,
-  count,
-  onDone,
-  onTakeOut,
-}: {
-  goal: Goal | undefined;
-  count: number;
-  onDone: () => void;
-  onTakeOut: (goal: Goal) => void;
-}) {
+function GoalForm({ goal, count, onDone }: { goal: Goal | undefined; count: number; onDone: () => void }) {
   const [name, setName] = useState(goal?.name ?? "");
   const [target, setTarget] = useState(rs(goal?.target));
   const [monthly, setMonthly] = useState(rs(goal?.monthly));
@@ -733,18 +1213,6 @@ function GoalForm({
       <Button type="submit" variant="primary" size="lg" disabled={!name.trim() || !t || m === null}>
         {goal ? "Save goal" : "Add goal"}
       </Button>
-      {goal ? <Button onClick={() => onTakeOut(goal)}>Take money out</Button> : null}
-      {goal ? (
-        <Button
-          variant="danger"
-          onClick={() => {
-            void enqueue("deleteGoal", { goal_id: goal.id });
-            onDone();
-          }}
-        >
-          Delete goal
-        </Button>
-      ) : null}
     </Form>
   );
 }

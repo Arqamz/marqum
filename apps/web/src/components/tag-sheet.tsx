@@ -11,6 +11,7 @@ import {
   classify,
   type Dataset,
   dayLabel,
+  daysBetween,
   formatRs,
   isClosed,
   monthLabel,
@@ -24,6 +25,7 @@ import { useEffect, useMemo, useState } from "react";
 import { enqueue, newId } from "../lib/commands.ts";
 import { monthName } from "../lib/months.ts";
 import { activeSubscriptions, kindFor } from "../lib/recurring.ts";
+import { deleteUnverified } from "../lib/restore.ts";
 import { stepUp } from "../lib/stepup.ts";
 import { escapeRegex, FLOW_LABEL, IN_FLOWS, lookup, OUT_FLOWS, timeOf, txnTitle } from "../lib/view.ts";
 import { CategoryPicker } from "./category-picker.tsx";
@@ -122,7 +124,10 @@ function TagForm({
   const [category, setCategory] = useState<string | null>(txn.category_id);
   const [picked, setPicked] = useState(txn.category_id !== null);
   const [flow, setFlow] = useState<Flow>(txn.flow);
-  const [loanId, setLoanId] = useState<string | null>(txn.loan_id);
+  // a payment linked to a loan you since deleted shows as not linked
+  const [loanId, setLoanId] = useState<string | null>(
+    txn.loan_id && ds.loans.some((x) => x.id === txn.loan_id) ? txn.loan_id : null,
+  );
   const [linked, setLinked] = useState<string | null>(txn.linked_txn_id);
   const [remember, setRemember] = useState(false);
   const [counterparty, setCounterparty] = useState<string | null>(txn.counterparty_id);
@@ -162,25 +167,37 @@ function TagForm({
   const pattern = rule?.pattern ?? null;
   const flows = txn.amount < 0 ? OUT_FLOWS : IN_FLOWS;
   const loans = ds.loans.filter((l) => l.closed_on === null || l.id === loanId);
-  // A payback rarely matches to the rupee and usually comes from someone other than the merchant: offer recent
-  // spends (60 days up to the payback) whose amount is closest, then the newest.
+  // A payback rarely matches to the rupee, comes from someone other than the merchant, and can arrive before the
+  // expense (a friend sends their share, then you pay the bill). Offer spends from 60 days either side, only in
+  // the category you picked (by top-level category), exact amounts first, then the nearest in time.
   const candidates = useMemo(() => {
-    const from = addDays(txn.occurred_at.slice(0, 10), -60);
-    const gap = (t: Transaction) => Math.abs(txn.amount + t.amount);
+    const day = txn.occurred_at.slice(0, 10);
+    const from = addDays(day, -60);
+    const to = addDays(day, 60);
+    const top = (id: string | null) => (id ? (id.split(".")[0] ?? id) : null);
+    // a suggested (not chosen) category doesn't narrow the list
+    const want = picked ? top(category) : null;
+    const apart = (t: Transaction) => Math.abs(daysBetween(day, t.occurred_at.slice(0, 10)));
     const near = ds.transactions
       .filter(
         (t) =>
           t.id !== txn.id &&
           t.amount < 0 &&
           t.flow === "spend" &&
-          t.occurred_at <= txn.occurred_at &&
-          t.occurred_at.slice(0, 10) >= from,
+          t.occurred_at.slice(0, 10) >= from &&
+          t.occurred_at.slice(0, 10) <= to &&
+          (want === null || top(t.category_id) === want),
       )
-      .sort((a, b) => gap(a) - gap(b) || b.occurred_at.localeCompare(a.occurred_at))
-      .slice(0, 10);
+      .sort(
+        (a, b) =>
+          Number(txn.amount + a.amount !== 0) - Number(txn.amount + b.amount !== 0) ||
+          apart(a) - apart(b) ||
+          b.occurred_at.localeCompare(a.occurred_at),
+      )
+      .slice(0, 20);
     const current = linked ? ds.transactions.find((t) => t.id === linked) : undefined;
     return current && !near.some((t) => t.id === current.id) ? [current, ...near] : near;
-  }, [ds, txn, linked]);
+  }, [ds, txn, linked, category, picked]);
   /** "+Rs 300 extra" / "Rs 200 short" / "exact": the payback against the expense. */
   const diff = (t: Transaction) => {
     const d = txn.amount + t.amount;
@@ -224,9 +241,8 @@ function TagForm({
       await saveRepeat();
       const linkedTxn =
         flow === "reimbursement" && linked ? ds.transactions.find((t) => t.id === linked) : undefined;
-      const finalReason = linkedTxn
-        ? `Payback for “${txnTitle(linkedTxn, lookup(ds))}”`
-        : reason.trim() || null;
+      const finalReason =
+        reason.trim() || (linkedTxn ? `Payback for “${txnTitle(linkedTxn, lookup(ds))}”` : null);
       await enqueue("tagTransaction", {
         txn_id: txn.id,
         reason: finalReason,
@@ -276,15 +292,13 @@ function TagForm({
 
       <LinkedTxns ds={ds} txn={txn} linked={flow === "reimbursement" ? linked : null} onJump={onJump} />
 
-      {flow === "reimbursement" ? null : (
-        <TextInput
-          label="Reason"
-          value={reason}
-          onChange={setReason}
-          placeholder="What was it for?"
-          enterKeyHint="done"
-        />
-      )}
+      <TextInput
+        label="Reason"
+        value={reason}
+        onChange={setReason}
+        placeholder={flow === "reimbursement" ? "Empty = “Payback for …”" : "What was it for?"}
+        enterKeyHint="done"
+      />
 
       {!closed ? (
         <HStack gap={2} wrap="wrap" role="radiogroup" aria-label="Kind">
@@ -351,9 +365,24 @@ function TagForm({
         <Selector
           label="Pays back"
           value={linked ?? ""}
-          onChange={(v) => setLinked(v || null)}
+          onChange={(v) => {
+            setLinked(v || null);
+            // linking fills an empty category from the expense
+            const exp = v ? ds.transactions.find((t) => t.id === v) : undefined;
+            if (exp?.category_id && !category) {
+              setPicked(true);
+              setCategory(exp.category_id);
+            }
+          }}
           presentation="adaptive"
           width="100%"
+          description={
+            candidates.length === 0
+              ? "No spends in this category within 60 days"
+              : picked && category
+                ? `Spends in ${lookup(ds).category.get(category.split(".")[0] ?? category)?.name ?? "this category"}, 60 days either side`
+                : "Pick a category to narrow this down"
+          }
           options={[
             { value: "", label: "Not linked" },
             ...candidates.map((t) => ({
@@ -410,7 +439,7 @@ function TagForm({
             variant="danger"
             width="full"
             onClick={() => {
-              void enqueue("deleteProvisional", { txn_id: txn.id });
+              void deleteUnverified(txn, ds);
               onDone();
             }}
           >

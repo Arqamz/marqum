@@ -60,6 +60,31 @@ export const Command = z.discriminatedUnion("name", [
     }),
   ),
   cmd("deleteProvisional", z.object({ txn_id: Id })),
+  /**
+   * Bring back an unverified row you deleted. The client sends the row as it was (its replica keeps deleted rows);
+   * it comes back as provisional, so the next statement can verify it.
+   */
+  cmd(
+    "restoreTransaction",
+    z.object({
+      row: z.object({
+        id: Id,
+        account_id: AccountId,
+        occurred_at: LocalDateTime,
+        amount: Paisa,
+        flow: Flow,
+        source: z.enum(["notification", "manual"]),
+        description: z.string(),
+        reason: z.string().nullable(),
+        category_id: Id.nullable(),
+        counterparty_id: Id.nullable(),
+        loan_id: Id.nullable(),
+        linked_txn_id: Id.nullable(),
+        notification_id: Id.nullable(),
+        created_at: z.string(),
+      }),
+    }),
+  ),
   cmd(
     "tagTransaction",
     z.object({
@@ -150,6 +175,8 @@ export const Command = z.discriminatedUnion("name", [
       closed_on: LocalDate.nullable(),
     }),
   ),
+  /** Removes a loan. Payments tagged to it stay loan payments (money did leave), just no longer linked. */
+  cmd("deleteLoan", z.object({ loan_id: Id })),
   cmd(
     "upsertGoal",
     z.object({
@@ -167,13 +194,15 @@ export const Command = z.discriminatedUnion("name", [
     "moveGoal",
     z.object({ move_id: Id, goal_id: Id, amount: Paisa, on: LocalDate, note: z.string().nullable() }),
   ),
+  /** Undo one goal deposit or withdrawal (a typo), as long as the envelope doesn't go below zero. */
+  cmd("deleteGoalMove", z.object({ move_id: Id })),
   cmd("setSetting", z.object({ key: z.string(), value: z.string() })),
   cmd("closeMonth", z.object({ month: Month })),
   cmd("reopenMonth", z.object({ month: Month, reason: z.string().min(3) })),
   /**
-   * Wipes ledger data (transactions, statements, balances, months, notifications, goal_moves) and restarts
+   * Wipes ledger data (transactions, statements, balances, months, notifications) and restarts
    * tracking at `tracking_start` (first of a month). Keeps configuration (categories, rules, counterparties,
-   * recurring, loans, goals, settings). Requires step-up. The server bumps the ledger epoch so every
+   * recurring, loans, goals and the money set aside for them, settings). Requires step-up. The server bumps the ledger epoch so every
    * client discards its local replica and re-pulls.
    */
   cmd("resetLedger", z.object({ tracking_start: LocalDate, confirm: z.literal("RESET") })),

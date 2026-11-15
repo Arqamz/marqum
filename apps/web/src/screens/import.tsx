@@ -8,21 +8,30 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { List, ListItem } from "@astryxdesign/core/List";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
-import { dayLabel, formatRs } from "@marqum/core";
+import { type Dataset, dayLabel, formatRs } from "@marqum/core";
+import type { Statement, Transaction } from "@marqum/schema";
 import { useLiveQuery } from "dexie-react-hooks";
 import { FileText, LockKeyhole } from "lucide-react";
 import { useState } from "react";
 import { useDataset } from "../components/dataset-provider.tsx";
+import { DeletedList } from "../components/deleted-list.tsx";
+import { Money } from "../components/money.tsx";
 import { Headline, Screen } from "../components/shell.tsx";
+import { TagSheet } from "../components/tag-sheet.tsx";
 import { Button } from "../components/ui/button.tsx";
+import { Sheet } from "../components/ui/sheet.tsx";
 import { db } from "../lib/db.ts";
 import { discardIntake, importAnyway, ingestFile, statementLabel, unlockIntake } from "../lib/intake.ts";
 import { opt } from "../lib/opt.ts";
 import { isNative } from "../lib/platform.ts";
+import { type DeletedRow, useDeleted } from "../lib/restore.ts";
+import { lookup, timeOf, txnTitle } from "../lib/view.ts";
 
 export function ImportScreen() {
   const ds = useDataset();
   const [busy, setBusy] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const deleted = useDeleted(ds);
   const waiting = useLiveQuery(
     () => db.intake.where("status").anyOf("needs_look", "needs_password").toArray(),
     [],
@@ -150,6 +159,7 @@ export function ImportScreen() {
               {statements.map((s) => (
                 <ListItem
                   key={s.id}
+                  onClick={() => setOpenId(s.id)}
                   label={statementLabel({ bank: s.account_id, from: s.period_from, to: s.period_to })}
                   description={`${s.row_count} rows · ${dayLabel(s.imported_at.slice(0, 10))}`}
                   endContent={
@@ -164,6 +174,105 @@ export function ImportScreen() {
           </Card>
         )}
       </VStack>
+      {ds ? (
+        <StatementSheet
+          ds={ds}
+          statement={ds.statements.find((x) => x.id === openId) ?? null}
+          deleted={deleted}
+          onClose={() => setOpenId(null)}
+        />
+      ) : null}
     </Screen>
+  );
+}
+
+/**
+ * One statement reconciled against the ledger: the rows it verified, unverified rows from its period that it
+ * doesn't have (still posting, or disputed), and rows you deleted from its period (with Restore).
+ */
+function StatementSheet({
+  ds,
+  statement: s,
+  deleted,
+  onClose,
+}: {
+  ds: Dataset;
+  statement: Statement | null;
+  deleted: DeletedRow[];
+  onClose: () => void;
+}) {
+  const [txnId, setTxnId] = useState<string | null>(null);
+  const l = lookup(ds);
+  const inPeriod = (t: Transaction) =>
+    s !== null &&
+    t.account_id === s.account_id &&
+    t.occurred_at.slice(0, 10) >= s.period_from &&
+    t.occurred_at.slice(0, 10) <= s.period_to;
+  const byTime = (a: Transaction, b: Transaction) => b.occurred_at.localeCompare(a.occurred_at);
+  const onIt = s
+    ? ds.transactions.filter((t) => t.statement_id === s.id && t.source !== "system").sort(byTime)
+    : [];
+  const missing = ds.transactions.filter((t) => t.status !== "verified" && inPeriod(t)).sort(byTime);
+  const gone = deleted.filter((d) => inPeriod(d.txn));
+  const row = (t: Transaction) => (
+    <ListItem
+      key={t.id}
+      label={txnTitle(t, l)}
+      description={`${dayLabel(t.occurred_at.slice(0, 10))}, ${timeOf(t.occurred_at)}${t.status === "disputed" ? " · not on the statement" : t.status === "provisional" ? " · not posted yet" : ""}`}
+      endContent={<Money value={Math.abs(t.amount)} {...(t.amount > 0 ? { tone: "pos" as const } : {})} />}
+      onClick={() => setTxnId(t.id)}
+    />
+  );
+  return (
+    <>
+      <Sheet
+        open={s !== null && txnId === null}
+        onOpenChange={(o) => !o && onClose()}
+        title={s ? statementLabel({ bank: s.account_id, from: s.period_from, to: s.period_to }) : ""}
+        description={
+          s
+            ? `${s.row_count} rows${s.opening !== null && s.closing !== null ? ` · ${formatRs(s.opening)} → ${formatRs(s.closing)}` : ""} · imported ${dayLabel(s.imported_at.slice(0, 10))}`
+            : undefined
+        }
+      >
+        <VStack gap={5} data-testid="statement-detail">
+          {missing.length > 0 ? (
+            <VStack gap={2}>
+              <Text type="label">{`Unverified · ${missing.length}`}</Text>
+              <Text type="supporting">
+                From this period but not on this statement. Card payments post a few days late, so the next
+                statement usually has them.
+              </Text>
+              <Card variant="muted" padding={0}>
+                <List hasDividers density="compact">
+                  {missing.map(row)}
+                </List>
+              </Card>
+            </VStack>
+          ) : null}
+          {gone.length > 0 ? (
+            <VStack gap={2}>
+              <Text type="label">{`Deleted · ${gone.length}`}</Text>
+              <Card variant="muted" padding={0}>
+                <DeletedList ds={ds} rows={gone} inset />
+              </Card>
+            </VStack>
+          ) : null}
+          <VStack gap={2}>
+            <Text type="label">{`On the statement · ${onIt.length}`}</Text>
+            {onIt.length > 0 ? (
+              <Card variant="muted" padding={0}>
+                <List hasDividers density="compact">
+                  {onIt.map(row)}
+                </List>
+              </Card>
+            ) : (
+              <Text type="supporting">No rows from tracked months.</Text>
+            )}
+          </VStack>
+        </VStack>
+      </Sheet>
+      <TagSheet txn={ds.transactions.find((t) => t.id === txnId) ?? null} onClose={() => setTxnId(null)} />
+    </>
   );
 }

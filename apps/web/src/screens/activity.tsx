@@ -23,6 +23,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Plus, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
+import { DeletedSheet } from "../components/deleted-list.tsx";
 import { ExpectedRows } from "../components/expected-list.tsx";
 import { openQuickAdd } from "../components/quick-add.tsx";
 import { Headline, Screen } from "../components/shell.tsx";
@@ -32,6 +33,7 @@ import { Button } from "../components/ui/button.tsx";
 import { Chip, Skeleton } from "../components/ui/controls.tsx";
 import { enqueue } from "../lib/commands.ts";
 import { monthName } from "../lib/months.ts";
+import { deleteUnverified, useDeleted } from "../lib/restore.ts";
 import type { ActivitySearch } from "../lib/search.ts";
 import { categoryPath, lookup, needsTag, txnTitle } from "../lib/view.ts";
 import { carryRows } from "./wallet.tsx";
@@ -92,6 +94,8 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
   const navigate = useNavigate();
   const [open, setOpen] = useState<string | null>(null);
   const [q, setQ] = useState(search.q ?? "");
+  const [binOpen, setBinOpen] = useState(false);
+  const deleted = useDeleted(ds);
   const current = monthOf(now);
   // Unverified/untagged/search look across all months unless a month is picked.
   const month = search.month ?? (search.filter || search.q || search.cp ? null : current);
@@ -201,6 +205,11 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
           >
             Unverified
           </Chip>
+          {deleted.length > 0 ? (
+            <Chip selected={false} onClick={() => setBinOpen(true)}>
+              {`Deleted · ${deleted.length}`}
+            </Chip>
+          ) : null}
           {catName ? (
             <Chip
               selected
@@ -237,7 +246,7 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
         <Banner
           status="warning"
           title={`${disputed.length} not on the statement`}
-          description="Keep if it went through the other wallet."
+          description="A later statement may still have it: card payments can take days to post. Keep it unless you're sure it never happened."
           collapsible={false}
         >
           <VStack gap={2}>
@@ -250,19 +259,15 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
                 </StackItem>
                 <Button
                   size="sm"
-                  variant="ghost"
+                  variant="secondary"
                   onClick={() =>
                     void enqueue("resolveDisputed", { txn_id: t.id, action: "keep_provisional" })
                   }
                 >
                   Keep
                 </Button>
-                <Button
-                  size="sm"
-                  variant="danger"
-                  onClick={() => void enqueue("resolveDisputed", { txn_id: t.id, action: "delete" })}
-                >
-                  Delete
+                <Button size="sm" variant="ghost" onClick={() => void deleteUnverified(t, ds)}>
+                  Remove
                 </Button>
               </HStack>
             ))}
@@ -283,6 +288,7 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
         <EmptyActivity filtered={Object.keys(search).length > 0} />
       )}
       <TagSheet txn={txn} onClose={() => setOpen(null)} />
+      <DeletedSheet ds={ds} rows={deleted} open={binOpen} onClose={() => setBinOpen(false)} />
     </>
   );
 }

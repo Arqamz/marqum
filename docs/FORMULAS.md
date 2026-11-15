@@ -63,9 +63,12 @@ internal.
 A statement row matches a provisional (or disputed) transaction in two passes. Both are one-to-one, best first:
 smallest time gap, then most shared description words, then by id (so the result is deterministic).
 
-1. **Exact:** the same wallet, exactly the same amount, and within ±36 hours.
+**Window:** the statement row is from 36 hours before the provisional row to **4 days after** it. Card payments
+are notified at once but post to the statement a day or more later, never earlier.
+
+1. **Exact:** the same wallet, exactly the same amount, and in the window.
 2. **Tolerant**, for rows left over. All of these must hold:
-   - the same wallet, both outflows, within ±36 hours;
+   - the same wallet, both outflows, in the window;
    - **merchant-word overlap ≥ 0.5**. Words are letters only (digits split words), at least 2 long, with no
      transfer jargon. Overlap = shared words ÷ the smaller word set, and a prefix of 4+ letters counts as shared,
      so `SPOTIFYP` ~ `SPOTIFY`;
@@ -178,6 +181,16 @@ Example: envelopes Rs 500 + Rs 300, iCloud Rs 900 recurring on SadaPay → floor
 recurring row, or one on NayaPay, doesn't count.
 
 ## Loans
+
+Borrowing and repaying, as you use it:
+
+- **Borrow:** add the loan on Plan (lender, purpose, amount, monthly installment). If the money arrived in a
+  wallet, tag that transfer "Loan" so it isn't counted as income.
+- **Repay:** tag each transfer to the lender "Loan payment" and pick the loan, or open the loan and **Record a
+  payment** (pick the transfer, or add a cash amount, which goes into `manual_repaid`). Transfers to the lender
+  are listed first when the lender's name matches a counterparty.
+- **Finish:** a loan whose payments reach the principal is cleared by itself. **Mark paid off** sets `closed_on`
+  (for the rest forgiven or paid in a way not tracked). **Delete** removes it; its payments stay loan payments.
 
 - **repaid** = Σ |amount| of transactions with flow `loan_repay` and this `loan_id`, + `manual_repaid`.
 - **outstanding** = max(0, principal − repaid), or 0 once `closed_on` is set.
@@ -430,6 +443,10 @@ Examples (an existing Rs 90,000 loan at Rs 9,000/month):
 that's 85,000 → −16,000 → −40,000 → −10,000 → 19,000 → −9,000 → **10,000 left**.
 
 ## Goals
+
+A goal is an envelope inside SadaPay: **Add money** / **Take money out** are goal moves, listed on the goal with a
+remove (it can't take the envelope below zero). **Bought it** takes out everything saved ("Spent on …") and sets
+`achieved_on`. **Delete** removes the goal and its moves, freeing the money. A ledger reset keeps goal moves.
 
 - saved = Σ goal moves. remaining = max(0, target − saved). progress = saved / target.
 - **ETA.** Contributions start this month, unless a positive move was already made this month, in which case they

@@ -1,4 +1,4 @@
-import { dayLabel, formatRs, monthOf } from "@marqum/core";
+import { type Dataset, dayLabel, execute, formatRs, karachiNow, monthOf } from "@marqum/core";
 import { pdfToLines, readCsvStatement, readPdfStatement, sha256Hex } from "@marqum/parsers";
 import type { ParsedStatement } from "@marqum/schema";
 import { MarqumNative, type SharedFile } from "../native/marqum-native.ts";
@@ -91,8 +91,12 @@ export async function ingestFile(
   const sha256 = await sha256Hex(f.bytes);
   const seen = await db.intake.get(sha256);
   const { dataset } = await loadDataset();
-  if (seen?.status === "imported" || seen?.status === "discarded") return { kind: "duplicate" };
-  if (dataset.statements.some((s) => s.file_sha256 === sha256)) {
+  // The inbox scan skips files it has seen. A file you pick or share yourself is always imported again: a
+  // re-import is safe (it replaces the period, keeping your tags) and its toast says what changed.
+  const interactive = opts.interactive ?? true;
+  if (!interactive && (seen?.status === "imported" || seen?.status === "discarded"))
+    return { kind: "duplicate" };
+  if (!interactive && dataset.statements.some((s) => s.file_sha256 === sha256)) {
     await record({
       sha256,
       name: f.name,
@@ -107,7 +111,7 @@ export async function ingestFile(
 
   let parsed: Awaited<ReturnType<typeof parseWithPassword>>;
   try {
-    parsed = await parseWithPassword(f, opts.interactive ?? true);
+    parsed = await parseWithPassword(f, interactive);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     await record({
@@ -154,11 +158,44 @@ export async function ingestFile(
     return { kind: "needs_look", statement: parsed, failed };
   }
 
-  const known = new Set(dataset.transactions.map((t) => t.external_id).filter(Boolean));
-  const added = parsed.rows.filter((r) => !known.has(r.external_id)).length;
+  const summary = importSummary(dataset, parsed, f.name, sha256);
   await importParsed(sha256, f.name, parsed);
-  toast({ tone: "success", title: `Imported ${statementLabel(parsed)} · ${added} new` });
-  return { kind: "imported", statement: parsed, added };
+  toast({ tone: "success", title: `Imported ${statementLabel(parsed)}`, detail: summary.text });
+  return { kind: "imported", statement: parsed, added: summary.added };
+}
+
+/**
+ * What an import will do, worked out with the same handler the server runs: "1 new · 2 verified ·
+ * 3 not posted yet · 1 not on the statement". Re-importing an unchanged statement says "no changes".
+ */
+export function importSummary(
+  ds: Dataset,
+  statement: ParsedStatement,
+  name: string,
+  sha256: string,
+): { added: number; text: string } {
+  let n = 0;
+  const out = execute(
+    ds,
+    {
+      id: "preview",
+      name: "importStatement",
+      at: karachiNow(),
+      args: { statement, file_name: name, file_sha256: sha256 },
+    },
+    { now: karachiNow(), steppedUp: true, newId: () => `preview-${n++}` },
+  );
+  const r = (out.result ?? {}) as Record<string, number | undefined>;
+  const count = (k: string) => r[k] ?? 0;
+  const parts = [
+    count("added") ? `${count("added")} new` : "",
+    count("matched") ? `${count("matched")} verified` : "",
+    count("updated") ? `${count("updated")} updated` : "",
+    count("removed") ? `${count("removed")} removed` : "",
+    count("waiting") ? `${count("waiting")} not posted yet` : "",
+    count("disputed") ? `${count("disputed")} not on the statement` : "",
+  ].filter(Boolean);
+  return { added: count("added"), text: parts.length ? parts.join(" · ") : "No changes: already up to date" };
 }
 
 async function record(e: Omit<IntakeEntry, "seen_at">): Promise<void> {
@@ -174,8 +211,10 @@ async function importParsed(sha256: string, name: string, statement: ParsedState
 export async function importAnyway(sha256: string): Promise<void> {
   const e = await db.intake.get(sha256);
   if (!e?.statement) return;
+  const { dataset } = await loadDataset();
+  const summary = importSummary(dataset, e.statement, e.name, sha256);
   await importParsed(sha256, e.name, e.statement);
-  toast({ tone: "success", title: `Imported ${statementLabel(e.statement)}` });
+  toast({ tone: "success", title: `Imported ${statementLabel(e.statement)}`, detail: summary.text });
 }
 
 export async function discardIntake(sha256: string): Promise<void> {

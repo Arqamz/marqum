@@ -125,16 +125,17 @@ statements/   your real statements, local only, gitignored
             ┌─────────────┐   statement row matches  ┌──────────┐
             │ provisional │ ───────────────────────▶ │ verified │
             └─────────────┘                          └──────────┘
-                   │ statement covers its date, no match
+                   │ statement covers its date (and 3+ days past it), no match
                    ▼
-            ┌─────────────┐  you resolve: delete it, or it was a different wallet
+            ┌─────────────┐  you resolve: keep it, or remove it (undo / restore later)
             │  disputed   │
             └─────────────┘
 ```
 
 - **Verified** rows come only from statements. Their amount, date and description are immutable.
 - **Matching** on import:
-  - candidates must be the same wallet and the same amount, within ±36 hours;
+  - candidates must be the same wallet and the same amount, from 36 hours before to 4 days after (card payments
+    post late);
   - a counterparty or description similarity breaks ties;
   - matches are one-to-one, best match first.
 - The provisional row's reason and category move onto the verified row.
@@ -142,6 +143,13 @@ statements/   your real statements, local only, gitignored
   - rows are matched by bank transaction ID, or by a stable hash when the bank gives none;
   - your tags and reasons are kept;
   - rows no longer on the statement are removed.
+- **Not posted yet:** an unmatched provisional row from the statement's last 3 days stays provisional (card
+  payments post a day or more late); older ones become disputed.
+- **Nothing is lost by deleting.** Deleting an unverified row offers Undo, and Activity › Deleted (or the
+  statement's own sheet under Statements) restores it. A deleted row that later shows up on a statement says so
+  instead of offering a duplicate.
+- **Re-import:** the phone's inbox scan skips files it has seen; a file you pick or share yourself is always
+  imported again, and the toast says what changed ("1 new · 2 verified · 3 not posted yet").
 - While any provisional rows exist, the UI shows a banner such as "3 unverified · Rs 2,450 since 7 Nov — generate statements".
 - **Cross-statement continuity:** each statement's opening balance must equal the previous statement's closing balance. A gap is flagged.
 
