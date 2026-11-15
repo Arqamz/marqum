@@ -8,6 +8,7 @@ import { type Dataset, formatRs, parseRs } from "@marqum/core";
 import type { AccountId, Recurring } from "@marqum/schema";
 import { useState } from "react";
 import { enqueue, newId } from "../lib/commands.ts";
+import { counterpartyKey, setDismissed } from "../lib/dismissed.ts";
 import {
   fillPreset,
   kindFor,
@@ -240,6 +241,9 @@ export function RecurringForm({
           confirm={`Tap again: stop tracking ${recurring.name}`}
           onConfirm={() => {
             void enqueue("deleteRecurring", { recurring_id: recurring.id });
+            // deleting it means "not a fixed charge": don't suggest it again
+            if (recurring.counterparty_id)
+              void setDismissed(ds, [counterpartyKey(recurring.counterparty_id)]);
             onDone();
           }}
         />

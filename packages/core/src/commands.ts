@@ -769,6 +769,24 @@ function upsertCategory(ds: Dataset, a: CommandArgs<"upsertCategory">): Outcome 
   ]);
 }
 
+function deleteCategory(ds: Dataset, a: CommandArgs<"deleteCategory">): Outcome {
+  const c = ds.categories.find((x) => x.id === a.category_id && !x.deleted);
+  if (!c) return fail("not_found", `category ${a.category_id} not found`);
+  const n = (k: number, what: string) => (k ? `${k} ${what}${k === 1 ? "" : "s"}` : "");
+  const uses = [
+    n(ds.transactions.filter((t) => !t.deleted && t.category_id === c.id).length, "transaction"),
+    n(ds.categories.filter((x) => !x.deleted && x.parent_id === c.id).length, "subcategory"),
+    n(ds.rules.filter((r) => !r.deleted && r.category_id === c.id).length, "rule"),
+    n(ds.recurring.filter((r) => !r.deleted && r.category_id === c.id).length, "fixed charge"),
+    n(
+      ds.counterparties.filter((x) => !x.deleted && x.default_category_id === c.id).length,
+      "counterparty default",
+    ),
+  ].filter(Boolean);
+  if (uses.length) return fail("invalid", `${c.name} is used by ${uses.join(", ")}: hide it instead`);
+  return ok([tombstone("categories", c)]);
+}
+
 function upsertRule(_ds: Dataset, a: CommandArgs<"upsertRule">): Outcome {
   if (!a.pattern.trim() || !compileRule(a.pattern)) return fail("invalid", `invalid pattern: ${a.pattern}`);
   const row: Rule = {
@@ -967,6 +985,14 @@ function setSettingCmd(_ds: Dataset, a: CommandArgs<"setSetting">): Outcome {
   if (a.key === "tracking_start") return fail("invalid", "change tracking start with resetLedger");
   if (a.key === "allocation_sadapay" && a.value !== "" && !/^\d+$/.test(a.value))
     return fail("invalid", "allocation_sadapay must be empty or a non-negative integer (paisa)");
+  if (a.key === "recurring_dismissed" && a.value !== "") {
+    try {
+      const v: unknown = JSON.parse(a.value);
+      if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) throw new Error("not a string array");
+    } catch {
+      return fail("invalid", "recurring_dismissed must be empty or a JSON array of strings");
+    }
+  }
   if (a.key === "forecast" && a.value !== "") {
     try {
       const v: unknown = JSON.parse(a.value);
@@ -1118,6 +1144,8 @@ function run(ds: Dataset, c: Command, ctx: ExecContext): Outcome {
       return recordBalance(ds, c.args);
     case "upsertCategory":
       return upsertCategory(ds, c.args);
+    case "deleteCategory":
+      return deleteCategory(ds, c.args);
     case "upsertRule":
       return upsertRule(ds, c.args);
     case "deleteRule":

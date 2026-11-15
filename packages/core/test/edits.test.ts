@@ -81,3 +81,38 @@ describe("deleteBalance", () => {
     expect(execute(ds, cmd("deleteBalance", { entry_id: "b2" }), ctx()).error).toBe("invalid");
   });
 });
+
+describe("deleteCategory", () => {
+  it("removes an unused category and refuses one in use, saying what uses it", () => {
+    const ds = withRows(seeded("2026-11-01"), {
+      categories: [
+        {
+          id: "pets",
+          parent_id: null,
+          name: "Pets",
+          icon: "paw-print",
+          wallet_hint: null,
+          nature: "variable",
+          sort: 99,
+          hidden: false,
+          budget: null,
+          version: 1,
+          deleted: false,
+        },
+      ],
+      transactions: [{ ...lunch, category_id: "food" }],
+    });
+    expect(execute(ds, cmd("deleteCategory", { category_id: "pets" }), ctx()).ok).toBe(true);
+    const used = execute(ds, cmd("deleteCategory", { category_id: "food" }), ctx());
+    expect(used.error).toBe("invalid");
+    expect(used.message).toMatch(/1 transaction/);
+  });
+  it("validates the dismissed suggestions setting", () => {
+    expect(
+      execute(ds0(), cmd("setSetting", { key: "recurring_dismissed", value: '["nayapay:GYM"]' }), ctx()).ok,
+    ).toBe(true);
+    expect(execute(ds0(), cmd("setSetting", { key: "recurring_dismissed", value: "{}" }), ctx()).error).toBe(
+      "invalid",
+    );
+  });
+});

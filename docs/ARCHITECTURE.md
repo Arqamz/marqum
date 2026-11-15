@@ -74,7 +74,10 @@ statements/   your real statements, local only, gitignored
            └────────────────────────────────────────────────────┘
 ```
 
-### Sync
+#Categories are managed in Settings › Categories and rules: add (top level or under a parent), rename, change the
+icon, and delete one nothing uses. A subcategory's id carries its parent (`food.snacks`), so it can't move parents.
+
+## Sync
 
 - Every change is a named **command**, such as `importStatement`, `addProvisional`, `setReason`,
   `recategorize`, `recordBalance`, `createLoan` or `closeMonth`.

@@ -11,6 +11,7 @@ const NAMES: Record<Command["name"], string> = {
   resolveDisputed: "Resolve",
   recordBalance: "Balance",
   upsertCategory: "Category change",
+  deleteCategory: "Category delete",
   upsertRule: "Rule",
   deleteRule: "Rule delete",
   upsertCounterparty: "Counterparty change",

@@ -25,12 +25,13 @@ import {
   parseRs,
   setting,
 } from "@marqum/core";
-import type { AccountId, NotificationIngest } from "@marqum/schema";
+import type { AccountId, Category, NotificationIngest } from "@marqum/schema";
 import { API } from "@marqum/schema";
 import { useNavigate } from "@tanstack/react-router";
 import { Bell, ChevronRight, TriangleAlert } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { BalanceSheet } from "../components/balance-sheet.tsx";
+import { CategoryEditor } from "../components/category-editor.tsx";
 import { CategoryIcon } from "../components/category-icon.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { Money } from "../components/money.tsx";
@@ -479,6 +480,7 @@ function RulesSheet({
   const [category, setCategory] = useState("");
   // the rule being edited (tap a rule to edit it); null = adding a new one
   const [editing, setEditing] = useState<string | null>(null);
+  const [catEdit, setCatEdit] = useState<{ category?: Category; parentId: string | null } | null>(null);
   const editingRule = ds.rules.find((r) => r.id === editing);
   const reset = () => {
     setEditing(null);
@@ -497,35 +499,69 @@ function RulesSheet({
     <Sheet open={open} onOpenChange={onOpenChange} title="Categories and rules">
       <VStack gap={8}>
         <VStack as="section" gap={2}>
-          <Heading level={3}>Categories</Heading>
-          <Text type="supporting">Off = hidden from Home until used</Text>
-          <List hasDividers density="compact">
-            {tops.map((c) => (
-              <ListItem
-                key={c.id}
-                label={c.name}
-                startContent={<CategoryIcon name={c.icon} className="text-fg-muted" />}
-                endContent={
-                  <Switch
-                    label={`Show ${c.name}`}
-                    checked={!c.hidden}
-                    onCheckedChange={(show) =>
-                      void enqueue("upsertCategory", {
-                        category_id: c.id,
-                        parent_id: c.parent_id,
-                        name: c.name,
-                        icon: c.icon,
-                        wallet_hint: c.wallet_hint,
-                        nature: c.nature,
-                        hidden: !show,
-                        sort: c.sort,
-                      })
+          <HStack justify="between" vAlign="center">
+            <Heading level={3}>Categories</Heading>
+            {catEdit ? null : (
+              <Button variant="text" size="sm" onClick={() => setCatEdit({ parentId: null })}>
+                New category
+              </Button>
+            )}
+          </HStack>
+          {catEdit ? (
+            <CategoryEditor
+              key={`${catEdit.category?.id ?? "new"}-${catEdit.parentId ?? ""}`}
+              ds={ds}
+              category={catEdit.category}
+              parentId={catEdit.parentId}
+              onEdit={setCatEdit}
+              onDone={() => setCatEdit(null)}
+            />
+          ) : (
+            <>
+              <Text type="supporting">
+                Tap to rename or add subcategories. Off = hidden from Home until used.
+              </Text>
+              <List hasDividers density="compact">
+                {tops.map((c) => (
+                  <ListItem
+                    key={c.id}
+                    label={c.name}
+                    {...opt({
+                      description:
+                        ds.categories
+                          .filter((x) => x.parent_id === c.id)
+                          .map((x) => x.name)
+                          .join(", ") || undefined,
+                    })}
+                    onClick={() => setCatEdit({ category: c, parentId: null })}
+                    startContent={<CategoryIcon name={c.icon} className="text-fg-muted" />}
+                    endContent={
+                      // biome-ignore lint/a11y/noStaticElementInteractions: only stops the row from opening
+                      // biome-ignore lint/a11y/useKeyWithClickEvents: the switch handles keys itself
+                      <span onClick={(e) => e.stopPropagation()}>
+                        <Switch
+                          label={`Show ${c.name}`}
+                          checked={!c.hidden}
+                          onCheckedChange={(show) =>
+                            void enqueue("upsertCategory", {
+                              category_id: c.id,
+                              parent_id: c.parent_id,
+                              name: c.name,
+                              icon: c.icon,
+                              wallet_hint: c.wallet_hint,
+                              nature: c.nature,
+                              hidden: !show,
+                              sort: c.sort,
+                            })
+                          }
+                        />
+                      </span>
                     }
                   />
-                }
-              />
-            ))}
-          </List>
+                ))}
+              </List>
+            </>
+          )}
         </VStack>
         <VStack as="section" gap={2}>
           <Heading level={3}>Rules</Heading>
