@@ -6,7 +6,7 @@ import {
   POSTING_LAG_MINUTES,
   trackingStart,
 } from "@marqum/core";
-import type { Transaction } from "@marqum/schema";
+import type { Recurring, Transaction } from "@marqum/schema";
 import { useLiveQuery } from "dexie-react-hooks";
 import { enqueue } from "./commands.ts";
 import { tbl } from "./db.ts";
@@ -33,16 +33,38 @@ export async function restoreRow(t: Transaction): Promise<void> {
       created_at: t.created_at,
     },
   });
+  // the fixed charge that went with it (deleting an unverified row drops a charge made from it)
+  const gone = await tbl("recurring")
+    .filter((r) => r.deleted === true && r.source_txn_id === t.id)
+    .toArray();
+  for (const r of gone as Recurring[])
+    await enqueue("upsertRecurring", {
+      recurring_id: r.id,
+      name: r.name,
+      account_id: r.account_id,
+      category_id: r.category_id,
+      counterparty_id: r.counterparty_id,
+      amount: r.amount,
+      day_of_month: r.day_of_month,
+      active: r.active,
+      cadence: r.cadence,
+      month_of_year: r.month_of_year,
+      kind: r.kind,
+      source_txn_id: t.id,
+    });
 }
 
 /** Delete an unverified row, with an Undo in the toast. Nothing is lost either way: see `useDeleted`. */
 export async function deleteUnverified(t: Transaction, ds: Dataset): Promise<void> {
+  const charge = ds.recurring.find((r) => r.source_txn_id === t.id);
   if (t.status === "disputed") await enqueue("resolveDisputed", { txn_id: t.id, action: "delete" });
   else await enqueue("deleteProvisional", { txn_id: t.id });
   toast({
     tone: "neutral",
     title: `Deleted ${formatRs(Math.abs(t.amount))} · ${txnTitle(t, lookup(ds))}`,
-    detail: "Activity › Deleted keeps it if you change your mind.",
+    detail: charge
+      ? `Its fixed charge ${charge.name} is gone too. Activity › Deleted keeps both if you change your mind.`
+      : "Activity › Deleted keeps it if you change your mind.",
     action: { label: "Undo", run: () => void restoreRow(t) },
   });
 }

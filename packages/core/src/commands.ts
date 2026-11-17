@@ -608,7 +608,14 @@ function deleteProvisional(ds: Dataset, a: CommandArgs<"deleteProvisional">, ctx
   if (!t) return fail("not_found", `transaction ${a.txn_id} not found`);
   if (t.status === "verified")
     return fail("invalid", "verified transactions come from statements and can't be deleted");
-  return ok([tombstone("transactions", t, { updated_at: ctx.now })]);
+  return ok([tombstone("transactions", t, { updated_at: ctx.now }), ...dropSourcedRecurring(ds, t.id)]);
+}
+
+/** A fixed charge made from an unverified row goes with it (restoring the row brings it back client-side). */
+function dropSourcedRecurring(ds: Dataset, txnId: string): Mutation[] {
+  return ds.recurring
+    .filter((r) => !r.deleted && r.source_txn_id === txnId)
+    .map((r) => tombstone("recurring", r));
 }
 
 function restoreTransaction(ds: Dataset, a: CommandArgs<"restoreTransaction">, ctx: ExecContext): Outcome {
@@ -682,7 +689,8 @@ function resolveDisputed(ds: Dataset, a: CommandArgs<"resolveDisputed">, ctx: Ex
   const t = findTxn(ds, a.txn_id);
   if (!t) return fail("not_found", `transaction ${a.txn_id} not found`);
   if (t.status !== "disputed") return fail("invalid", "transaction is not disputed");
-  if (a.action === "delete") return ok([tombstone("transactions", t, { updated_at: ctx.now })]);
+  if (a.action === "delete")
+    return ok([tombstone("transactions", t, { updated_at: ctx.now }), ...dropSourcedRecurring(ds, t.id)]);
   return ok([mut("transactions", { ...t, status: "provisional", updated_at: ctx.now })]);
 }
 

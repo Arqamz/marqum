@@ -18,13 +18,13 @@ import {
   monthLedger,
   monthOf,
 } from "@marqum/core";
-import type { Transaction } from "@marqum/schema";
+import type { Recurring, Transaction } from "@marqum/schema";
 import { useNavigate } from "@tanstack/react-router";
 import { Plus, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
 import { DeletedSheet } from "../components/deleted-list.tsx";
-import { ExpectedRows } from "../components/expected-list.tsx";
+import { ChargeSheet, ExpectedRows } from "../components/expected-list.tsx";
 import { openQuickAdd } from "../components/quick-add.tsx";
 import { Headline, Screen } from "../components/shell.tsx";
 import { TagSheet } from "../components/tag-sheet.tsx";
@@ -96,6 +96,7 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
   const [open, setOpen] = useState<string | null>(null);
   const [q, setQ] = useState(search.q ?? "");
   const [binOpen, setBinOpen] = useState(false);
+  const [charge, setCharge] = useState<Recurring | null>(null);
   const deleted = useDeleted(ds);
   const current = monthOf(now);
   // Unverified/untagged/search look across all months unless a month is picked.
@@ -239,7 +240,7 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
           <Text type="label" color="secondary">
             This week
           </Text>
-          <ExpectedRows charges={soon} />
+          <ExpectedRows charges={soon} onOpenCharge={setCharge} />
         </VStack>
       ) : null}
 
@@ -313,6 +314,7 @@ function ActivityContent({ ds, now, search }: { ds: Dataset; now: string; search
       )}
       <TagSheet txn={txn} onClose={() => setOpen(null)} />
       <DeletedSheet ds={ds} rows={deleted} open={binOpen} onClose={() => setBinOpen(false)} />
+      <ChargeSheet ds={ds} charge={charge} onClose={() => setCharge(null)} />
     </>
   );
 }
