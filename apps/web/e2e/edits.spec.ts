@@ -22,6 +22,7 @@ async function mockApi(page: Page) {
 
 // Fixing mistakes: every edit says what it will do, and every delete asks twice.
 test("edits and confirmations", async ({ page }) => {
+  test.slow();
   await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
   await page.clock.setFixedTime(FIXED);
   const world = await mockApi(page);
@@ -48,6 +49,13 @@ test("edits and confirmations", async ({ page }) => {
   await expect.poll(() => live().find((t) => t.reason === "Lunch at Kolachi")?.account_id).toBe("sadapay");
   expect(live().find((t) => t.reason === "Lunch at Kolachi")?.amount).toBe(-150000);
 
+  // Mark it monthly: a fixed charge made from this row
+  await page.getByText("Lunch at Kolachi").click();
+  await page.getByTestId("repeats").getByRole("radio", { name: "Monthly" }).click();
+  await page.getByRole("button", { name: /^Save$/ }).click();
+  const charge = () => world.server.dataset().recurring.find((r) => r.source_txn_id === "warm-1");
+  await expect.poll(() => charge()?.name).toBe("Lunch at Kolachi");
+
   // Delete needs a second tap that names the row
   await page.getByText("Lunch at Kolachi").click();
   await page.getByRole("button", { name: "Delete this unverified row" }).click();
@@ -56,6 +64,26 @@ test("edits and confirmations", async ({ page }) => {
   await shot("delete-armed");
   await confirm.click();
   await expect.poll(() => live().some((t) => t.reason === "Lunch at Kolachi")).toBe(false);
+  // …and its fixed charge goes too: no ghost "expected" row left behind
+  await expect.poll(() => charge()).toBeUndefined();
+  await page.goto("/#/activity");
+  await expect(page.getByTestId("expected-row").filter({ hasText: "Lunch at Kolachi" })).toHaveCount(0);
+  // Restoring the row brings the charge back; tapping its expected row opens it to edit or delete
+  await page.getByRole("button", { name: /^Deleted · / }).click();
+  await page.getByTestId("deleted-list").getByRole("button", { name: "Restore" }).first().click();
+  await expect.poll(() => charge()?.name).toBe("Lunch at Kolachi");
+  await page.getByRole("button", { name: "Close" }).click();
+  // Moved weeks back, the row no longer pays this month's charge: it shows as expected, and tapping it opens it
+  await page.goto("/#/activity?filter=unverified");
+  await page.getByRole("button", { name: /^Lunch at Kolachi/ }).click();
+  await page.getByTestId("fix-facts").getByLabel("When").fill("2026-10-20T13:20");
+  await page.getByRole("button", { name: /^Save/ }).click();
+  await page.goto("/#/activity");
+  await page.getByTestId("expected-row").filter({ hasText: "Lunch at Kolachi" }).click();
+  await shot("charge-sheet");
+  await page.getByRole("button", { name: "Delete Lunch at Kolachi" }).click();
+  await page.getByRole("button", { name: "Tap again: stop tracking Lunch at Kolachi" }).click();
+  await expect.poll(() => charge()).toBeUndefined();
 
   // Balance: a gap is offered as a missing transaction; moving the opening is separate and confirmed
   await page.goto("/#/wallet/nayapay");

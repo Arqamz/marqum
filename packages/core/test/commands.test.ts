@@ -109,6 +109,26 @@ describe("deleteProvisional / resolveDisputed", () => {
     expect(execute(ds, cmd("deleteProvisional", { txn_id: "v1" }), ctx()).error).toBe("invalid");
     expect(execute(ds, cmd("deleteProvisional", { txn_id: "zz" }), ctx()).error).toBe("not_found");
   });
+  it("takes the fixed charge made from the deleted row with it", () => {
+    const r = recurring("iCloud", 20000, { id: "r1", source_txn_id: "d1" });
+    const other = recurring("Spotify", 79397, { id: "r2", source_txn_id: "v1" });
+    const ds2 = withRows(ds, { recurring: [r, other] });
+    for (const c of [
+      cmd("deleteProvisional", { txn_id: "d1" }),
+      cmd("resolveDisputed", { txn_id: "d1", action: "delete" as const }),
+    ]) {
+      const out = execute(ds2, c, ctx());
+      expect(rowsOf(out.mutations, "recurring")).toEqual([
+        expect.objectContaining({ id: "r1", deleted: true }),
+      ]);
+    }
+    expect(
+      rowsOf(
+        execute(ds2, cmd("resolveDisputed", { txn_id: "d1", action: "keep_provisional" }), ctx()).mutations,
+        "recurring",
+      ),
+    ).toEqual([]);
+  });
   it("resolves disputed by delete or revert to provisional", () => {
     expect(
       rowsOf(

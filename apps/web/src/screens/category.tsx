@@ -15,13 +15,14 @@ import {
   monthOf,
   trackingStartMonth,
 } from "@marqum/core";
+import type { Recurring } from "@marqum/schema";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { type PointerEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { AddToCategorySheet } from "../components/add-to-category.tsx";
 import { DailyBars, MonthlyBars } from "../components/charts.tsx";
 import { useDataset, useNow } from "../components/dataset-provider.tsx";
-import { ExpectedRows } from "../components/expected-list.tsx";
+import { ChargeSheet, ExpectedRows } from "../components/expected-list.tsx";
 import { Money } from "../components/money.tsx";
 import { Screen, Section } from "../components/shell.tsx";
 import { TagSheet } from "../components/tag-sheet.tsx";
@@ -110,6 +111,7 @@ function Stat({ label, children }: { label: string; children: ReactNode }) {
 function CategoryContent({ ds, now, id, month }: { ds: Dataset; now: string; id: string; month: string }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState<string | null>(null);
+  const [charge, setCharge] = useState<Recurring | null>(null);
   const [mode, setMode] = useState<PeriodMode>("month");
   const l = useMemo(() => lookup(ds), [ds]);
   const category = l.category.get(id);
@@ -329,7 +331,9 @@ function CategoryContent({ ds, now, id, month }: { ds: Dataset; now: string; id:
       </HStack>
 
       <Section title="Transactions">
-        {isMonth ? <ExpectedRows charges={detail.expected} onOpenTxn={(id) => setOpen(id)} /> : null}
+        {isMonth ? (
+          <ExpectedRows charges={detail.expected} onOpenTxn={(id) => setOpen(id)} onOpenCharge={setCharge} />
+        ) : null}
         {txns.length > 0 ? (
           <TxnList
             txns={txns}
@@ -346,6 +350,7 @@ function CategoryContent({ ds, now, id, month }: { ds: Dataset; now: string; id:
         txn={open ? (ds.transactions.find((t) => t.id === open) ?? null) : null}
         onClose={() => setOpen(null)}
       />
+      <ChargeSheet ds={ds} charge={charge} onClose={() => setCharge(null)} />
     </>
   );
 }
